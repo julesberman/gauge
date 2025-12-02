@@ -1,0 +1,30 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools >= 64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gauge"
+version = "0.1.0"  # Replace with your project's version
+
+[tool.setuptools]
+packages = ["gauge"]
+
+[tool.ruff]
+target-version = "py312"
+
+# Fast-feedback rule set for research code
+extend-select = [
+  "E",   # Pycodestyle (syntax)
+  "F",   # Pyflakes (logic errors, undefined names)
+  "B",   # Bugbear (likely bugs)
+  "I",    # Import sort compatibility
+  "NPY",  # numpy physical units, dtype warnings, etc.
+]
+ignore = ["E501", "B905"]   # don't nag about line length
+
+###############################################################################
+# ---------- Style nit-picks (pep8-naming, commas, whitespace) --------------
+# extend-select = ["FLY"]          # ‘flake8-flynt’, suggest f-strings, etc.
+# extend-select = ["Q"]            # quote consistency
+# extend-select = ["COM"]          # trailing commas

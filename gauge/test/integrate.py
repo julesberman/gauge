@@ -1,0 +1,219 @@
+
+"""Sampling utilities used during integration tests or quick eval runs."""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from gauge.config.config import Config
+from gauge.loss import noise
+
+
+def _prepare_labels(class_l, n_samples: int):
+    if class_l is None:
+        return None
+    arr = jnp.asarray(class_l)
+    arr = jnp.squeeze(arr)
+    if arr.ndim == 0:
+        arr = jnp.full((n_samples,), arr.astype(jnp.int32), dtype=jnp.int32)
+    else:
+        if arr.ndim > 1:
+            raise ValueError("class_l must be scalar or 1D.")
+        if arr.shape[0] == 1 and n_samples > 1:
+            arr = jnp.full((n_samples,), arr[0], dtype=arr.dtype)
+        elif arr.shape[0] != n_samples:
+            raise ValueError(
+                f"class_l has {arr.shape[0]} entries but {n_samples} samples requested.")
+        arr = arr.astype(jnp.int32)
+    return arr
+
+
+def _clip_if_needed(x, clip_bounds):
+    if clip_bounds is None:
+        return x
+    return jnp.clip(x, clip_bounds[0], clip_bounds[1])
+
+
+def _sample_ddpm(net, opt_params, x, labels, sigmas, alpha_bar, alphas, betas,
+                 sample_shape, clip_bounds, extra_std, dtype, key, return_traj=False):
+    """Run ancestral DDPM sampling."""
+    n_samples = sample_shape[0]
+    traj = [] if return_traj else None
+    if traj is not None:
+        traj.append(np.asarray(x))
+    for idx in range(sigmas.shape[0] - 1, -1, -1):
+        sigma_t = sigmas[idx]
+        alpha_bar_t = alpha_bar[idx]
+        # alpha_bar_prev_t = alpha_bar[idx -
+        #                              1] if idx > 0 else jnp.array(1.0, dtype=dtype)
+        alpha_t = alphas[idx]
+        beta_t = betas[idx]
+
+        time_inp = jnp.full((n_samples,), sigma_t, dtype=dtype)
+        eps_pred = net.apply(opt_params, x, time_inp, labels)
+
+        pred_coef = beta_t / jnp.sqrt(1.0 - alpha_bar_t)
+        mean = (x - pred_coef * eps_pred) / jnp.sqrt(alpha_t)
+        if idx > 0:
+            sigma = jnp.sqrt(jnp.maximum(beta_t, 1e-8))
+            if extra_std is not None:
+                sigma = jnp.sqrt(jnp.square(sigma) + jnp.square(extra_std))
+            key, noise_key = jax.random.split(key)
+            noise = jax.random.normal(noise_key, sample_shape, dtype=dtype)
+            x = mean + sigma * noise
+        else:
+            x = mean
+
+        x = _clip_if_needed(x, clip_bounds)
+
+        if traj is not None:
+            traj.append(np.asarray(x))
+
+    return x, key, traj
+
+
+def _sample_ddim(net, opt_params, x, labels, sigmas, alpha_bar, alphas,
+                 sample_shape, clip_bounds, extra_std, dtype, key, return_traj=False):
+    """Run deterministic (or eta-controlled) DDIM sampling."""
+    n_samples = sample_shape[0]
+    eta = extra_std if extra_std is not None else jnp.asarray(0.0, dtype=dtype)
+    traj = [] if return_traj else None
+    if traj is not None:
+        traj.append(np.asarray(x))
+    for idx in range(sigmas.shape[0] - 1, -1, -1):
+        sigma_t = sigmas[idx]
+        alpha_bar_t = alpha_bar[idx]
+        alpha_bar_prev_t = alpha_bar[idx -
+                                     1] if idx > 0 else jnp.array(1.0, dtype=dtype)
+        alpha_t = alphas[idx]
+
+        time_inp = jnp.full((n_samples,), sigma_t, dtype=dtype)
+        eps_pred = net.apply(opt_params, x, time_inp, labels)
+
+        sigma_eta = eta * jnp.sqrt(
+            (1.0 - alpha_bar_prev_t) / (1.0 - alpha_bar_t) * (1.0 - alpha_t)
+        )
+        coeff = jnp.sqrt(jnp.maximum(
+            1.0 - alpha_bar_prev_t - sigma_eta ** 2, 0.0))
+        pred_x0 = (x - jnp.sqrt(1.0 - alpha_bar_t) *
+                   eps_pred) / jnp.sqrt(alpha_bar_t)
+        x = jnp.sqrt(alpha_bar_prev_t) * pred_x0 + coeff * eps_pred
+        if idx > 0:
+            key, noise_key = jax.random.split(key)
+            noise = jax.random.normal(noise_key, sample_shape, dtype=dtype)
+            x = x + sigma_eta * noise
+
+        x = _clip_if_needed(x, clip_bounds)
+
+        if traj is not None:
+            traj.append(np.asarray(x))
+
+    return x, key, traj
+
+
+def _renormalize_to_uint8(arr):
+    """Convert data in [-1, 1] to uint8 [0, 255]."""
+    arr = np.asarray(arr)
+    arr = np.clip(arr, -1.0, 1.0)
+    arr = (arr + 1.0) / 2.0
+    arr = np.rint(arr * 255.0)
+    return arr.astype(np.uint8)
+
+
+def sample_model(cfg: Config, net, opt_params, n_samples, data_shape, class_l, key,
+                 return_trajectory=False, renormalize=True):
+    """Sample batches from a trained DDPM/DDIM model.
+
+    Args:
+        renormalize: If True, map outputs from [-1, 1] to uint8 [0, 255].
+    """
+    integr_cfg = cfg.integrate
+    loss_cfg = cfg.loss
+    dtype = jnp.float64 if cfg.x64 else jnp.float32
+    n_samples = int(n_samples)
+
+    data_shape = tuple(data_shape)
+    sample_shape = (n_samples,) + data_shape
+    labels = _prepare_labels(class_l, n_samples)
+
+    n_steps = max(int(getattr(integr_cfg, "n_steps", 1)), 1)
+    sigmas = noise.make_sigma_schedule(
+        loss_cfg.sigma_min,
+        loss_cfg.sigma_max,
+        n_steps,
+        loss_cfg.schedule,
+    ).astype(dtype)
+
+    alpha_bar = jnp.clip(
+        noise.sigma_to_alpha_bar(sigmas).astype(dtype), 1e-5, 1.0
+    )
+    alpha_bar_prev = jnp.concatenate(
+        [jnp.array([1.0], dtype=dtype), alpha_bar[:-1]]
+    )
+    alphas = jnp.clip(alpha_bar / alpha_bar_prev, 1e-4, 0.9999)
+    betas = 1.0 - alphas
+
+    method = str(getattr(integr_cfg, "method", "ddpm")).lower()
+    extra_var = max(float(getattr(integr_cfg, "var", 0.0)), 0.0)
+    extra_std = None
+    if extra_var > 0:
+        extra_std = jnp.asarray(extra_var ** 0.5, dtype=dtype)
+
+    clip_range = getattr(integr_cfg, "clip", (-1.0, 1.0))
+    clip_bounds = None
+    if clip_range is not None:
+        cmin, cmax = clip_range
+        clip_min = jnp.asarray(-jnp.inf if cmin is None else cmin, dtype=dtype)
+        clip_max = jnp.asarray(jnp.inf if cmax is None else cmax, dtype=dtype)
+        clip_bounds = (clip_min, clip_max)
+
+    key, noise_key = jax.random.split(key)
+    x = jax.random.normal(noise_key, sample_shape, dtype=dtype)
+
+    traj = None
+    if method == "ddim":
+        x, _, traj = _sample_ddim(
+            net,
+            opt_params,
+            x,
+            labels,
+            sigmas,
+            alpha_bar,
+            alphas,
+            sample_shape,
+            clip_bounds,
+            extra_std,
+            dtype,
+            key,
+            return_traj=return_trajectory,
+        )
+    else:
+        x, _, traj = _sample_ddpm(
+            net,
+            opt_params,
+            x,
+            labels,
+            sigmas,
+            alpha_bar,
+            alphas,
+            betas,
+            sample_shape,
+            clip_bounds,
+            extra_std,
+            dtype,
+            key,
+            return_traj=return_trajectory,
+        )
+
+    x = np.asarray(x)
+
+    if renormalize:
+        x = _renormalize_to_uint8(x)
+
+    if return_trajectory:
+        traj_stack = np.stack(traj, axis=0) if traj else None
+        if renormalize and traj_stack is not None:
+            traj_stack = _renormalize_to_uint8(traj_stack)
+        return x, traj_stack
+
+    return x

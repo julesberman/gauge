@@ -1,0 +1,15 @@
+diffrax
+einops
+flax
+h5py
+hydra-core
+jax[cuda12]
+matplotlib
+numpy
+omegaconf
+optax
+pandas
+scipy
+seaborn
+tensorflow_datasets
+tqdm
