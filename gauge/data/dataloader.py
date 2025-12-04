@@ -121,8 +121,8 @@ def get_dataloader(
         sampler=sampler,
         num_workers=num_workers,
         collate_fn=collate_fn,
-        prefetch_factor=4
-
+        prefetch_factor=4,
+        drop_last=True
     )
 
     # Wrap the (finite) DataLoader into an infinite generator

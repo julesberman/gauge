@@ -135,6 +135,20 @@ def _renormalize_to_uint8(arr):
     return arr.astype(np.uint8)
 
 
+def get_cofficients(sigmas):
+
+    alpha_bar = jnp.clip(
+        noise.sigma_to_alpha_bar(sigmas), 1e-5, 1.0
+    )
+    alpha_bar_prev = jnp.concatenate(
+        [jnp.array([1.0]), alpha_bar[:-1]]
+    )
+    alphas = jnp.clip(alpha_bar / alpha_bar_prev, 1e-4, 0.9999)
+    betas = 1.0 - alphas
+
+    return alphas, alpha_bar, alpha_bar_prev, betas
+
+
 def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, class_l=None,
                  return_trajectory=False, renormalize=True):
     """Sample batches from a trained DDPM/DDIM model.
@@ -142,6 +156,7 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
     Args:
         renormalize: If True, map outputs from [-1, 1] to uint8 [0, 255].
     """
+    method = cfg.integrate.method
     integr_cfg = cfg.integrate
     loss_cfg = cfg.loss
     dtype = jnp.float64 if cfg.x64 else jnp.float32
@@ -158,28 +173,11 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
         loss_cfg.schedule,
     ).astype(dtype)
 
-    alpha_bar = jnp.clip(
-        noise.sigma_to_alpha_bar(sigmas).astype(dtype), 1e-5, 1.0
-    )
-    alpha_bar_prev = jnp.concatenate(
-        [jnp.array([1.0], dtype=dtype), alpha_bar[:-1]]
-    )
-    alphas = jnp.clip(alpha_bar / alpha_bar_prev, 1e-4, 0.9999)
-    betas = 1.0 - alphas
+    alphas, alpha_bar, alpha_bar_prev, betas = noise.get_cofficients(sigmas)
 
-    method = str(getattr(integr_cfg, "method", "ddpm")).lower()
-    extra_var = max(float(getattr(integr_cfg, "var", 0.0)), 0.0)
-    extra_std = None
-    if extra_var > 0:
-        extra_std = jnp.asarray(extra_var ** 0.5, dtype=dtype)
+    extra_std = integr_cfg.var
 
     clip_range = getattr(integr_cfg, "clip", (-1.0, 1.0))
-    clip_bounds = None
-    if clip_range is not None:
-        cmin, cmax = clip_range
-        clip_min = jnp.asarray(-jnp.inf if cmin is None else cmin, dtype=dtype)
-        clip_max = jnp.asarray(jnp.inf if cmax is None else cmax, dtype=dtype)
-        clip_bounds = (clip_min, clip_max)
 
     key, noise_key = jax.random.split(key)
     x = jax.random.normal(noise_key, sample_shape, dtype=dtype)
@@ -194,7 +192,7 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
             alpha_bar,
             alphas,
             sample_shape,
-            clip_bounds,
+            clip_range,
             extra_std,
             dtype,
             key,
@@ -211,7 +209,7 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
             alphas,
             betas,
             sample_shape,
-            clip_bounds,
+            clip_range,
             extra_std,
             dtype,
             key,

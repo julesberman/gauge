@@ -2,6 +2,7 @@ import os
 
 import hydra
 import jax
+import jax.numpy as jnp
 from jax import jit
 
 import gauge.io.result as R
@@ -12,6 +13,7 @@ from gauge.data.dataset import get_dataset
 from gauge.io.load import load
 from gauge.io.save import save_results
 from gauge.loss.gauge import get_gauge_loss
+from gauge.loss.noise import sigma_to_alpha_bar
 from gauge.loss.score import get_score_loss
 from gauge.net.get import get_network
 from gauge.test.test import run_test
@@ -49,8 +51,11 @@ def run(cfg: Config) -> None:
                                gauge_loss, params_init, key_G, name='gauge')
 
         @jit
-        def apply_K(*args):
-            return G_net.apply(G_params, *args) + Score_net.apply(score_params, *args)
+        def apply_K(x, time_inp, labels):
+            alpha_bar = sigma_to_alpha_bar(jnp.squeeze(time_inp))
+            beta = jnp.sqrt(1-alpha_bar)
+            beta = beta[:, None, None, None]
+            return Score_net.apply(score_params, x, time_inp, labels) - beta * G_net.apply(G_params, x, time_inp, labels)
 
         run_test(cfg, apply_K,
                  dataset, data_shape, key_test, name='gauge')

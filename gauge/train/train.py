@@ -24,8 +24,9 @@ def train_model(cfg: Config, net, dataloader, score_loss, params_init, key_opt, 
 
     opt_cfg = cfg.optimizer
 
+    has_aux = name == 'gauge'
     opt_params, loss_history = run_train(net, params_init, dataloader, score_loss, opt_cfg.iters, optimizer=opt_cfg.optimizer,
-                                         learning_rate=opt_cfg.lr, scheduler=opt_cfg.scheduler, rng=key_opt)
+                                         learning_rate=opt_cfg.lr, scheduler=opt_cfg.scheduler, rng=key_opt, has_aux=has_aux)
 
     R.RESULT[f"{name}_opt_params"] = opt_params
     R.RESULT[f"{name}_loss_history"] = loss_history
@@ -52,6 +53,7 @@ def run_train(
     scheduler: str = 'cos',
     N: int = 2048,               # Record the training loss 1000 times by default
     rng=None,                    # Accept a JAX key instead of an int seed
+    has_aux=False
 ):
     """
     Train a Flax module with dropout using Optax optimizers.
@@ -125,11 +127,12 @@ def run_train(
             return fwd_fn(p, x, cls, rng)
 
         # Compute gradients
-        loss_value, grads = jax.value_and_grad(_loss_fn)(params)
+        loss_out, grads = jax.value_and_grad(
+            _loss_fn, has_aux=has_aux)(params)
         updates, new_opt_state = tx.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
 
-        return new_params, new_opt_state, loss_value, rng
+        return new_params, new_opt_state, loss_out, rng
 
     loss_history = []
     interval = max(1, iters // N)
@@ -168,12 +171,19 @@ def run_train(
 
         rng, skey = jax.random.split(rng)
         # Take a single training step
-        opt_params, opt_state, loss_value, rng = train_step(
+        opt_params, opt_state, loss_out, rng = train_step(
             opt_params, skey, opt_state, x, cls
         )
 
-        # Update the progress bar
-        pbar.set_description(f"loss: {loss_value:.6f}")
+        if has_aux:
+            loss_value, aux = loss_out
+            des = f"loss: {loss_value:.4f}"
+            for k, v in aux.items():
+                des = f'{des} | {k}: {v:.4f}'
+            pbar.set_description(des)
+        else:
+            loss_value = loss_out
+            pbar.set_description(f"loss: {loss_value:.6f}")
 
         # Record the loss every `interval` steps
         if (step % interval) == 0:

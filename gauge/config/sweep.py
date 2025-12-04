@@ -1,12 +1,13 @@
 SWEEP = {
-    "dataset": "mnist",
-    "optimizer.iters": "500_000",
+    "dataset": "cifar10",
+    "optimizer.iters": "350_000",
     "loss.method": 'ddpm',
-    "integrate.method": 'ddpm, ddim',
+    "integrate.method": 'ddim',
     "net.arch": "unet",
     "net.size": "m",
     "sample.batch_size": "256",
-    "gauge.run": "true"
+    "gauge.run": "true",
+    "gauge.kinetic_a": "1.0,10.0"
 }
 
 
@@ -15,7 +16,7 @@ def get_sweep():
 
 
 SLURM_CONFIG_M = {
-    "timeout_min": 60 * 10,
+    "timeout_min": 60 * 24,
     "cpus_per_task": 16,
     "mem_gb": 250,
     "gres": "gpu:h100:1",
