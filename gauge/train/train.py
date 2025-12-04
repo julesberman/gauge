@@ -20,18 +20,18 @@ str_to_opt = {
 }
 
 
-def train_model(cfg: Config, net, dataloader, score_loss, params_init, key_opt):
+def train_model(cfg: Config, net, dataloader, score_loss, params_init, key_opt, name=''):
 
     opt_cfg = cfg.optimizer
 
     opt_params, loss_history = run_train(net, params_init, dataloader, score_loss, opt_cfg.iters, optimizer=opt_cfg.optimizer,
                                          learning_rate=opt_cfg.lr, scheduler=opt_cfg.scheduler, rng=key_opt)
 
-    R.RESULT["opt_params"] = opt_params
-    R.RESULT["loss_history"] = loss_history
+    R.RESULT[f"{name}_opt_params"] = opt_params
+    R.RESULT[f"{name}_loss_history"] = loss_history
 
     if len(loss_history) > 0:
-        R.RESULT["final_loss"] = loss_history[-1]
+        R.RESULT[f"{name}_final_loss"] = loss_history[-1]
 
     return opt_params
 
@@ -166,9 +166,10 @@ def run_train(
         else:
             x, cls = [jax_put(bb, float_16=False) for bb in (x, cls)]
 
+        rng, skey = jax.random.split(rng)
         # Take a single training step
         opt_params, opt_state, loss_value, rng = train_step(
-            opt_params, rng, opt_state, x, cls
+            opt_params, skey, opt_state, x, cls
         )
 
         # Update the progress bar

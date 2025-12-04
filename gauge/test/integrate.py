@@ -4,6 +4,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+from tqdm.auto import tqdm
 
 from gauge.config.config import Config
 from gauge.loss import noise
@@ -25,6 +26,8 @@ def _prepare_labels(class_l, n_samples: int):
             raise ValueError(
                 f"class_l has {arr.shape[0]} entries but {n_samples} samples requested.")
         arr = arr.astype(jnp.int32)
+
+    arr = arr.reshape(-1, 1)
     return arr
 
 
@@ -34,28 +37,36 @@ def _clip_if_needed(x, clip_bounds):
     return jnp.clip(x, clip_bounds[0], clip_bounds[1])
 
 
-def _sample_ddpm(net, opt_params, x, labels, sigmas, alpha_bar, alphas, betas,
-                 sample_shape, clip_bounds, extra_std, dtype, key, return_traj=False):
+def _sample_ddpm(apply_fn, x, labels, sigmas, alpha_bar, alpha_bar_prev,
+                 alphas, betas, sample_shape, clip_bounds, extra_std, dtype, key,
+                 return_traj=False, use_tqdm=True):
     """Run ancestral DDPM sampling."""
     n_samples = sample_shape[0]
     traj = [] if return_traj else None
     if traj is not None:
         traj.append(np.asarray(x))
-    for idx in range(sigmas.shape[0] - 1, -1, -1):
+
+    idx_range = range(sigmas.shape[0] - 1, -1, -1)
+    if use_tqdm:
+        idx_range = tqdm(idx_range, desc="sampling model", colour='magenta')
+    for idx in idx_range:
         sigma_t = sigmas[idx]
         alpha_bar_t = alpha_bar[idx]
-        # alpha_bar_prev_t = alpha_bar[idx -
-        #                              1] if idx > 0 else jnp.array(1.0, dtype=dtype)
+        alpha_bar_prev_t = alpha_bar_prev[idx]
         alpha_t = alphas[idx]
         beta_t = betas[idx]
 
-        time_inp = jnp.full((n_samples,), sigma_t, dtype=dtype)
-        eps_pred = net.apply(opt_params, x, time_inp, labels)
+        time_inp = jnp.full((n_samples, 1), sigma_t, dtype=dtype)
+        eps_pred = apply_fn(x, time_inp, labels)
 
-        pred_coef = beta_t / jnp.sqrt(1.0 - alpha_bar_t)
+        pred_coef = (1.0 - alpha_t) / jnp.sqrt(1.0 - alpha_bar_t)
+
         mean = (x - pred_coef * eps_pred) / jnp.sqrt(alpha_t)
         if idx > 0:
-            sigma = jnp.sqrt(jnp.maximum(beta_t, 1e-8))
+            beta_tilde = (1.0 - alpha_bar_prev_t) / \
+                (1.0 - alpha_bar_t) * beta_t
+            beta_tilde = jnp.maximum(beta_tilde, 1e-8)
+            sigma = jnp.sqrt(beta_tilde)
             if extra_std is not None:
                 sigma = jnp.sqrt(jnp.square(sigma) + jnp.square(extra_std))
             key, noise_key = jax.random.split(key)
@@ -72,32 +83,36 @@ def _sample_ddpm(net, opt_params, x, labels, sigmas, alpha_bar, alphas, betas,
     return x, key, traj
 
 
-def _sample_ddim(net, opt_params, x, labels, sigmas, alpha_bar, alphas,
-                 sample_shape, clip_bounds, extra_std, dtype, key, return_traj=False):
+def _sample_ddim(apply_fn, x, labels, sigmas, alpha_bar, alphas,
+                 sample_shape, clip_bounds, extra_std, dtype, key, return_traj=False, use_tqdm=True):
     """Run deterministic (or eta-controlled) DDIM sampling."""
     n_samples = sample_shape[0]
     eta = extra_std if extra_std is not None else jnp.asarray(0.0, dtype=dtype)
     traj = [] if return_traj else None
     if traj is not None:
         traj.append(np.asarray(x))
-    for idx in range(sigmas.shape[0] - 1, -1, -1):
+
+    idx_range = range(sigmas.shape[0] - 1, -1, -1)
+    if use_tqdm:
+        idx_range = tqdm(idx_range, desc="sampling model", colour='magenta')
+    for idx in idx_range:
         sigma_t = sigmas[idx]
         alpha_bar_t = alpha_bar[idx]
         alpha_bar_prev_t = alpha_bar[idx -
                                      1] if idx > 0 else jnp.array(1.0, dtype=dtype)
         alpha_t = alphas[idx]
 
-        time_inp = jnp.full((n_samples,), sigma_t, dtype=dtype)
-        eps_pred = net.apply(opt_params, x, time_inp, labels)
+        time_inp = jnp.full((n_samples, 1), sigma_t, dtype=dtype)
+        eps_pred = apply_fn(x, time_inp, labels)
 
-        sigma_eta = eta * jnp.sqrt(
-            (1.0 - alpha_bar_prev_t) / (1.0 - alpha_bar_t) * (1.0 - alpha_t)
-        )
-        coeff = jnp.sqrt(jnp.maximum(
-            1.0 - alpha_bar_prev_t - sigma_eta ** 2, 0.0))
-        pred_x0 = (x - jnp.sqrt(1.0 - alpha_bar_t) *
+        sigma_eta = eta * \
+            jnp.sqrt((1 - alpha_bar_prev_t) /
+                     (1 - alpha_bar_t) * (1 - alpha_t))
+        pred_x0 = (x - jnp.sqrt(1 - alpha_bar_t) *
                    eps_pred) / jnp.sqrt(alpha_bar_t)
-        x = jnp.sqrt(alpha_bar_prev_t) * pred_x0 + coeff * eps_pred
+        x = jnp.sqrt(alpha_bar_prev_t) * pred_x0 + \
+            jnp.sqrt(1 - alpha_bar_prev_t - sigma_eta**2) * eps_pred
+
         if idx > 0:
             key, noise_key = jax.random.split(key)
             noise = jax.random.normal(noise_key, sample_shape, dtype=dtype)
@@ -120,7 +135,7 @@ def _renormalize_to_uint8(arr):
     return arr.astype(np.uint8)
 
 
-def sample_model(cfg: Config, net, opt_params, n_samples, data_shape, class_l, key,
+def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, class_l=None,
                  return_trajectory=False, renormalize=True):
     """Sample batches from a trained DDPM/DDIM model.
 
@@ -136,7 +151,6 @@ def sample_model(cfg: Config, net, opt_params, n_samples, data_shape, class_l, k
     sample_shape = (n_samples,) + data_shape
     labels = _prepare_labels(class_l, n_samples)
 
-    n_steps = max(int(getattr(integr_cfg, "n_steps", 1)), 1)
     sigmas = noise.make_sigma_schedule(
         loss_cfg.sigma_min,
         loss_cfg.sigma_max,
@@ -173,8 +187,7 @@ def sample_model(cfg: Config, net, opt_params, n_samples, data_shape, class_l, k
     traj = None
     if method == "ddim":
         x, _, traj = _sample_ddim(
-            net,
-            opt_params,
+            apply_fn,
             x,
             labels,
             sigmas,
@@ -189,12 +202,12 @@ def sample_model(cfg: Config, net, opt_params, n_samples, data_shape, class_l, k
         )
     else:
         x, _, traj = _sample_ddpm(
-            net,
-            opt_params,
+            apply_fn,
             x,
             labels,
             sigmas,
             alpha_bar,
+            alpha_bar_prev,
             alphas,
             betas,
             sample_shape,
@@ -212,6 +225,7 @@ def sample_model(cfg: Config, net, opt_params, n_samples, data_shape, class_l, k
 
     if return_trajectory:
         traj_stack = np.stack(traj, axis=0) if traj else None
+        traj_stack = np.swapaxes(traj_stack, 0, 1)
         if renormalize and traj_stack is not None:
             traj_stack = _renormalize_to_uint8(traj_stack)
         return x, traj_stack

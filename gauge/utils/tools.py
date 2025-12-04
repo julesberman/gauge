@@ -313,3 +313,114 @@ def get_cpu_count() -> int:
     print("could not get cpu count, returning 1")
 
     return 1
+
+
+def get_available_ram_gb():
+    paths = [
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",            # older cgroup v1
+        "/sys/fs/cgroup/memory.max",                              # cgroup v2
+    ]
+
+    for path in paths:
+        try:
+            with open(path, "r") as f:
+                limit = int(f.read().strip())
+                if limit > 0 and limit < 1 << 60:  # filter out "no limit" sentinel values
+                    return limit / (1024**3)
+        except FileNotFoundError:
+            continue
+    return -1
+
+
+# def hutch_div(f, n_samples=1, rv_type="rademacher", argnum=0):
+#     """
+#     Hutchinson-style divergence estimator for a vector field f.
+
+#     Parameters
+#     ----------
+#     f : callable
+#         Function f(*args) with respect to which we want div wrt args[argnum].
+#         Assumes: f(..., x, ...) has same shape as x at position argnum.
+#     n_samples : int
+#         Number of Hutchinson probe vectors per call.
+#     rv_type : str
+#         "gaussian", "rademacher", "sphere"
+#     argnum : int
+#         Index of argument to take divergence with respect to.
+
+#     Returns
+#     -------
+#     div : callable
+#         Function div(*args, key) -> scalar divergence estimate.
+#     """
+
+#     def sample_vector(key, shape, dtype=jnp.float32):
+#         if rv_type == "gaussian":
+#             return jax.random.normal(key, shape, dtype=dtype)
+#         elif rv_type == "rademacher":
+#             return jax.random.rademacher(key, shape, dtype=dtype)
+#         elif rv_type == "sphere":
+#             v = jax.random.normal(key, shape, dtype=dtype)
+#             return v / (jnp.linalg.norm(v) + 1e-7)
+#         else:
+#             raise ValueError(f"Unknown rv_type {rv_type!r}")
+
+#     @jax.jit
+#     def div(key, *args):
+#         x = args[argnum]
+
+#         def g(x_arg):
+#             # Reconstruct argument list with x_arg in position argnum
+#             new_args = list(args)
+#             new_args[argnum] = x_arg
+#             return f(*new_args)
+
+#         keys = jax.random.split(key, n_samples)
+
+#         def one(k):
+#             v = sample_vector(k, x.shape, dtype=x.dtype)
+#             _, jvp_val = jax.jvp(g, (x,), (v,))
+#             return jnp.vdot(v, jvp_val)
+
+#         return jax.vmap(one)(keys).mean()
+
+#     return div
+
+def hutch_div(f, argnum: int = 1, n_samples: int = 1):
+    """
+    Hutchinson divergence estimator for both:
+      - f: R^d -> R^d           (x.shape = (d,))
+      - f: R^{b,d} -> R^{b,d}   (x.shape = (b,d))
+
+    Returns div(*args, key) whose output has shape:
+      - ()    for unbatched x
+      - (b,)  for batched x  (per-example divergence)
+    """
+
+    @jax.jit
+    def div(*args, key):
+        x = args[argnum]
+
+        def g(x_arg):
+            # put x_arg back into argument list
+            new_args = list(args)
+            new_args[argnum] = x_arg
+            return f(*new_args)
+
+        keys = jax.random.split(key, n_samples)
+
+        def one(k):
+            # v matches x shape exactly (works for batched and unbatched)
+            v = jax.random.rademacher(k, shape=x.shape, dtype=x.dtype)
+
+            # jvp over entire batch at once if batched
+            _, jvp_val = jax.jvp(g, (x,), (v,))
+
+            # inner product over the feature dimension
+            # preserves batch dim if present
+            return jnp.sum(v * jvp_val, axis=-1)
+
+        # Average over samples, keeps batch dimension if present
+        return jax.vmap(one)(keys).mean(axis=0)
+
+    return div

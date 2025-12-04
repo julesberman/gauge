@@ -18,11 +18,11 @@ class Network:
 
 @dataclass
 class Optimizer:
-    lr: float = 1e-4
-    iters: int = 50_000
+    lr: float = 2e-4
+    iters: int = 20_000
     scheduler: str = 'cos'
     warm_up: bool = False
-    optimizer: str = "adam"
+    optimizer: str = "adamw"
 
 
 @dataclass
@@ -33,17 +33,17 @@ class Data:
 
 @dataclass
 class Sample:
-    batch_size: int = 64
+    batch_size: int = 1024
     shuffle: bool = True
     shuffle_buffer_size: Optional[int] = None
-    repeat: bool = True
+    channel_first: bool = False
+    materialize: bool = True
 
 
 @dataclass
 class Integrate:
     # assume we have ddpm model, sample with ddpm or ddim
-    method: str = "ddpm"  # "ddpm", "ddim"
-    n_steps: int = 25  # number of steps
+    method: str = "ddim"  # "ddpm", "ddim"
     clip: tuple = (-1, 1)  # clip data at each step
     var: float = 0.0  # varaince of noise in reverse process
 
@@ -69,7 +69,17 @@ class Loss:
 
 
 @dataclass
+class Gauge:
+    run: bool = True
+    gauge_a: float = 1.0
+    kinetic_a: float = 1.0
+#    div_dist: str = 'rademacher'  # gaussian, sphere, unit, rademacher
+
+
+@dataclass
 class Test:
+    n_steps: list[int] = field(default_factory=lambda: [
+                               2, 5, 10, 25, 50, 100, 250])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16
@@ -80,7 +90,7 @@ class Test:
 @dataclass
 class Config:
 
-    dataset: str = 'cifar10'
+    dataset: str = 'mnist'
 
     net: Network = field(default_factory=Network)
 
@@ -88,11 +98,13 @@ class Config:
     data: Data = field(default_factory=Data)
     sample: Sample = field(default_factory=Sample)
     loss: Loss = field(default_factory=Loss)
+    gauge: Gauge = field(default_factory=Gauge)
 
     integrate: Integrate = field(default_factory=Integrate)
     test: Test = field(default_factory=Test)
 
     # misc
+    load_score: str = ''
     name: str = field(
         default_factory=lambda: f"{unique_id(4)}_{epoch_time(2)}")
     x64: bool = False  # whether to use 64 bit precision in jax

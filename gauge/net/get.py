@@ -19,7 +19,7 @@ def get_unet_size(cfg: Config, out_channels, emb_features):
     size = cfg.net.size
     if size == "s":
         net = UNet(
-            feature_depths=[32, 64, 128],
+            feature_depths=[96, 128, 256],
             emb_features=emb_features,
             num_res_blocks=2,
             num_middle_res_blocks=1,
@@ -27,7 +27,7 @@ def get_unet_size(cfg: Config, out_channels, emb_features):
         )
     elif size == "m":
         net = UNet(
-            feature_depths=[96, 128, 256],
+            feature_depths=[128, 128, 360],
             emb_features=emb_features,
             num_res_blocks=2,
             num_middle_res_blocks=2,

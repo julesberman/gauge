@@ -16,7 +16,6 @@ def make_ddpm_loss(loss_cfg, sigmas, apply_fn):
         key_sigma, key_noise = jax.random.split(key)
 
         sigma_vals, _ = noise.sample_sigmas(key_sigma, sigmas, batch_size)
-        sigma_vals = sigma_vals.astype(clean_data.dtype)
         eps = jax.random.normal(
             key_noise, clean_data.shape, dtype=clean_data.dtype)
 
