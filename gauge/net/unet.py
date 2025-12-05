@@ -228,7 +228,7 @@ class UNet(nn.Module):
     num_middle_res_blocks: int = 1
     activation: Callable = jax.nn.gelu
     norm_groups: int = 8
-    n_classes: int = 101
+    n_classes: int = 10
 
     def setup(self):
         norm_cls = partial(
@@ -247,7 +247,7 @@ class UNet(nn.Module):
         temb = None
         if time is not None and class_l is not None:
             temb = jnp.concatenate(
-                [temb, class_l], axis=-1)
+                [time, class_l], axis=-1)
         if time is None and class_l is not None:
             temb = class_l
         if time is not None and class_l is None:

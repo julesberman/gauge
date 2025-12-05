@@ -1,13 +1,14 @@
 SWEEP = {
-    "dataset": "cifar10",
-    "optimizer.iters": "350_000",
+    "dataset": "mnist",
+    "optimizer.iters": "100_000",
     "loss.method": 'ddpm',
     "integrate.method": 'ddim',
     "net.arch": "unet",
     "net.size": "m",
     "sample.batch_size": "256",
     "gauge.run": "true",
-    "gauge.kinetic_a": "1.0,10.0"
+    "gauge.kinetic_a": "1.0, 10.0, 100.0, 1000.0",
+    "load_score": "'/scratch/jmb1174/sc/gauge/results/mnist/single/ok2'"
 }
 
 

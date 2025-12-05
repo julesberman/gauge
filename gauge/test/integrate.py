@@ -135,20 +135,6 @@ def _renormalize_to_uint8(arr):
     return arr.astype(np.uint8)
 
 
-def get_cofficients(sigmas):
-
-    alpha_bar = jnp.clip(
-        noise.sigma_to_alpha_bar(sigmas), 1e-5, 1.0
-    )
-    alpha_bar_prev = jnp.concatenate(
-        [jnp.array([1.0]), alpha_bar[:-1]]
-    )
-    alphas = jnp.clip(alpha_bar / alpha_bar_prev, 1e-4, 0.9999)
-    betas = 1.0 - alphas
-
-    return alphas, alpha_bar, alpha_bar_prev, betas
-
-
 def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, class_l=None,
                  return_trajectory=False, renormalize=True):
     """Sample batches from a trained DDPM/DDIM model.

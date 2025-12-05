@@ -35,6 +35,7 @@ def run(cfg: Config) -> None:
         print(f"loading score model from {cfg.load_score}...")
         load_cfg, df = load(cfg.load_score)
         score_params = df['score_opt_params']
+        R.RESULT["score_opt_params"] = score_params
     else:
         score_params = train_model(cfg, Score_net, dataloader,
                                    score_loss, params_init, key_opt, name='score')

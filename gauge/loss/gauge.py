@@ -25,6 +25,8 @@ def get_gauge_loss(cfg: Config, G_net, apply_score, sigmas):
 
     kinetic_a = cfg.gauge.kinetic_a
     gauge_a = cfg.gauge.gauge_a
+    alphas_sched, alpha_bar_sched, alpha_bar_prev_sched, _ = noise.get_cofficients(
+        sigmas)
 
     def loss_fn(params, clean_data, class_l, key):
 
@@ -32,12 +34,13 @@ def get_gauge_loss(cfg: Config, G_net, apply_score, sigmas):
         batch_size = clean_data.shape[0]
         data_shape = clean_data.shape
         key_sigma, key_noise, div_key = jax.random.split(key, num=3)
-        sigma_vals, _ = noise.sample_sigmas(key_sigma, sigmas, batch_size)
+        sigma_vals, t_idx = noise.sample_sigmas(key_sigma, sigmas, batch_size)
 
-        alphas, alpha_bar, alpha_bar_prev, betas = noise.get_cofficients(
-            sigma_vals[..., 0])
-        alpha_bar_prev = alpha_bar_prev[:, None]
-        betas = betas[:, None]
+        alpha_bar_t = alpha_bar_sched[t_idx]      # shape (batch,)
+        alpha_bar_prev_t = alpha_bar_prev_sched[t_idx]  # shape (batch,)
+        alpha_bar = alpha_bar_t[:, None]      # for broadcast
+        alpha_bar_prev = alpha_bar_prev_t[:, None]
+
         eps = jax.random.normal(
             key_noise, clean_data.shape, dtype=clean_data.dtype)
         alpha_bar = noise.sigma_to_alpha_bar(sigma_vals)
@@ -47,8 +50,9 @@ def get_gauge_loss(cfg: Config, G_net, apply_score, sigmas):
         x_t = clean_scale * clean_data + noise_scale * eps
 
         # get score field
-        score_field = - noise_scale.reshape(batch_size, -1)*apply_score(
+        eps_field = apply_score(
             x_t, sigma_vals, class_l).reshape(batch_size, -1)
+        score_field = - (1/noise_scale.reshape(batch_size, -1))*eps_field
 
         # get gauge field
         G_field = G_net.apply(params, x_t, sigma_vals,
@@ -59,10 +63,7 @@ def get_gauge_loss(cfg: Config, G_net, apply_score, sigmas):
         # assemeble reverse update velocity
         A, B = compute_A_B(alpha_bar, alpha_bar_prev)
         A, B = A[:, None], B[:, None]
-        v_total = 0.5*(A*x_flat + B * (score_field+G_field))
-
-        # gauge and rev velocity
-        total_field = v_total + G_field
+        total_field = 0.5*(A*x_flat + B * (score_field+G_field))
 
         def flat_G(x_flat, sig, cls):
             x = x_flat.reshape(data_shape)
