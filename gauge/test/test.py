@@ -17,7 +17,7 @@ def run_test(cfg: Config, apply_fn, dataset, data_shape, key, name=''):
     for steps in n_steps:
 
         samples, trajectories = sample_model(cfg, apply_fn,
-                                             cfg.test.n_samples, steps, data_shape, key, class_l=None, return_trajectory=True)
+                                             cfg.test.n_samples, steps, data_shape, key, class_l=None)
         trajectories = trajectories[:cfg.test.n_trajectories]
 
         if cfg.test.save_samples:

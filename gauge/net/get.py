@@ -1,25 +1,26 @@
 import jax
 import numpy as np
 
-from gauge.config.config import Config
+from gauge.net.mlp import DNN
 from gauge.net.unet import UNet
 from gauge.utils.tools import pshape
 
 
-def get_arch(cfg: Config, out_channels):
+def get_arch(net_cfg, out_channels):
 
-    if cfg.net.arch == "unet":
-        net = get_unet_size(cfg, out_channels, cfg.net.emb_features)
+    if net_cfg.arch == "unet":
+        net = get_unet_size(net_cfg.size, out_channels, net_cfg.emb_features)
+    if net_cfg.arch == "mlp":
+        net = DNN(width=128, depth=7, out_features=out_channels)
 
     return net
 
 
-def get_unet_size(cfg: Config, out_channels, emb_features):
+def get_unet_size(size, out_channels, emb_features):
 
-    size = cfg.net.size
     if size == "s":
         net = UNet(
-            feature_depths=[96, 128, 256],
+            feature_depths=[96, 128],
             emb_features=emb_features,
             num_res_blocks=2,
             num_middle_res_blocks=1,
@@ -45,7 +46,7 @@ def get_unet_size(cfg: Config, out_channels, emb_features):
     return net
 
 
-def get_network(cfg: Config, dataloader, key):
+def get_network(net_cfg, dataloader, key):
 
     x_data, class_l = next(iter(dataloader))
 
@@ -54,7 +55,7 @@ def get_network(cfg: Config, dataloader, key):
     out_channels = x_data.shape[-1]
     time = np.ones((x_data.shape[0], 1))
 
-    net = get_arch(cfg, out_channels)
+    net = get_arch(net_cfg, out_channels)
 
     params_init = net.init(key, x_data, time, class_l)
     param_count = sum(x.size for x in jax.tree_util.tree_leaves(params_init))

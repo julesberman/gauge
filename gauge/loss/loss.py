@@ -20,7 +20,7 @@ def get_score_loss(cfg: Config, net):
         loss_cfg.schedule,
     )
 
-    if method == "ddpm":
+    if method == "ddim" or method == 'ddpm':
         return make_ddpm_loss(loss_cfg, sigmas, apply_fn), sigmas
     if method == "dsm":
         return make_dsm_loss(loss_cfg, sigmas, apply_fn), sigmas

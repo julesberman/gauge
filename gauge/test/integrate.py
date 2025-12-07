@@ -1,6 +1,7 @@
 
 """Sampling utilities used during integration tests or quick eval runs."""
 
+import diffrax as dfx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,84 +11,17 @@ from gauge.config.config import Config
 from gauge.loss import noise
 
 
-def _prepare_labels(class_l, n_samples: int):
-    if class_l is None:
-        return None
-    arr = jnp.asarray(class_l)
-    arr = jnp.squeeze(arr)
-    if arr.ndim == 0:
-        arr = jnp.full((n_samples,), arr.astype(jnp.int32), dtype=jnp.int32)
-    else:
-        if arr.ndim > 1:
-            raise ValueError("class_l must be scalar or 1D.")
-        if arr.shape[0] == 1 and n_samples > 1:
-            arr = jnp.full((n_samples,), arr[0], dtype=arr.dtype)
-        elif arr.shape[0] != n_samples:
-            raise ValueError(
-                f"class_l has {arr.shape[0]} entries but {n_samples} samples requested.")
-        arr = arr.astype(jnp.int32)
-
-    arr = arr.reshape(-1, 1)
-    return arr
-
-
 def _clip_if_needed(x, clip_bounds):
     if clip_bounds is None:
         return x
     return jnp.clip(x, clip_bounds[0], clip_bounds[1])
 
 
-def _sample_ddpm(apply_fn, x, labels, sigmas, alpha_bar, alpha_bar_prev,
-                 alphas, betas, sample_shape, clip_bounds, extra_std, dtype, key,
-                 return_traj=False, use_tqdm=True):
-    """Run ancestral DDPM sampling."""
-    n_samples = sample_shape[0]
-    traj = [] if return_traj else None
-    if traj is not None:
-        traj.append(np.asarray(x))
-
-    idx_range = range(sigmas.shape[0] - 1, -1, -1)
-    if use_tqdm:
-        idx_range = tqdm(idx_range, desc="sampling model", colour='magenta')
-    for idx in idx_range:
-        sigma_t = sigmas[idx]
-        alpha_bar_t = alpha_bar[idx]
-        alpha_bar_prev_t = alpha_bar_prev[idx]
-        alpha_t = alphas[idx]
-        beta_t = betas[idx]
-
-        time_inp = jnp.full((n_samples, 1), sigma_t, dtype=dtype)
-        eps_pred = apply_fn(x, time_inp, labels)
-
-        pred_coef = (1.0 - alpha_t) / jnp.sqrt(1.0 - alpha_bar_t)
-
-        mean = (x - pred_coef * eps_pred) / jnp.sqrt(alpha_t)
-        if idx > 0:
-            beta_tilde = (1.0 - alpha_bar_prev_t) / \
-                (1.0 - alpha_bar_t) * beta_t
-            beta_tilde = jnp.maximum(beta_tilde, 1e-8)
-            sigma = jnp.sqrt(beta_tilde)
-            if extra_std is not None:
-                sigma = jnp.sqrt(jnp.square(sigma) + jnp.square(extra_std))
-            key, noise_key = jax.random.split(key)
-            noise = jax.random.normal(noise_key, sample_shape, dtype=dtype)
-            x = mean + sigma * noise
-        else:
-            x = mean
-
-        x = _clip_if_needed(x, clip_bounds)
-
-        if traj is not None:
-            traj.append(np.asarray(x))
-
-    return x, key, traj
-
-
 def _sample_ddim(apply_fn, x, labels, sigmas, alpha_bar, alphas,
-                 sample_shape, clip_bounds, extra_std, dtype, key, return_traj=False, use_tqdm=True):
+                 sample_shape, clip_bounds, key, return_traj=False, use_tqdm=True):
     """Run deterministic (or eta-controlled) DDIM sampling."""
     n_samples = sample_shape[0]
-    eta = extra_std if extra_std is not None else jnp.asarray(0.0, dtype=dtype)
+
     traj = [] if return_traj else None
     if traj is not None:
         traj.append(np.asarray(x))
@@ -96,34 +30,27 @@ def _sample_ddim(apply_fn, x, labels, sigmas, alpha_bar, alphas,
     if use_tqdm:
         idx_range = tqdm(idx_range, desc="sampling model", colour='magenta')
     for idx in idx_range:
-        sigma_t = sigmas[idx]
+        # sigma_t = sigmas[idx]
         alpha_bar_t = alpha_bar[idx]
         alpha_bar_prev_t = alpha_bar[idx -
-                                     1] if idx > 0 else jnp.array(1.0, dtype=dtype)
-        alpha_t = alphas[idx]
+                                     1] if idx > 0 else jnp.array(1.0)
 
-        time_inp = jnp.full((n_samples, 1), sigma_t, dtype=dtype)
+        time = idx / (sigmas.shape[0] - 1)
+        time_inp = jnp.full((n_samples, 1), time)
         eps_pred = apply_fn(x, time_inp, labels)
 
-        sigma_eta = eta * \
-            jnp.sqrt((1 - alpha_bar_prev_t) /
-                     (1 - alpha_bar_t) * (1 - alpha_t))
         pred_x0 = (x - jnp.sqrt(1 - alpha_bar_t) *
                    eps_pred) / jnp.sqrt(alpha_bar_t)
         x = jnp.sqrt(alpha_bar_prev_t) * pred_x0 + \
-            jnp.sqrt(1 - alpha_bar_prev_t - sigma_eta**2) * eps_pred
-
-        if idx > 0:
-            key, noise_key = jax.random.split(key)
-            noise = jax.random.normal(noise_key, sample_shape, dtype=dtype)
-            x = x + sigma_eta * noise
+            jnp.sqrt(1 - alpha_bar_prev_t) * eps_pred
 
         x = _clip_if_needed(x, clip_bounds)
 
         if traj is not None:
             traj.append(np.asarray(x))
 
-    return x, key, traj
+    np.stack(traj, axis=0)
+    return x, traj
 
 
 def _renormalize_to_uint8(arr):
@@ -135,83 +62,183 @@ def _renormalize_to_uint8(arr):
     return arr.astype(np.uint8)
 
 
-def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, class_l=None,
-                 return_trajectory=False, renormalize=True):
+def _sample_dsm(
+    apply_fn,
+    x,
+    labels,
+    n_steps,
+    clip_range,
+    key,
+    return_traj=False,
+    *,
+    solver=None,
+    rtol=1e-3,
+    atol=1e-3,
+):
+    """Sample from the VP probability-flow ODE using a DSM-trained score model.
+
+    Args:
+        apply_fn: Callable (x_t, t, labels) -> score estimate. `t` has shape (B, 1).
+                  Typically a params-partially-applied model.apply.
+        x: Initial state at maximum time (t=1.0), e.g. standard Gaussian noise.
+        labels: Conditioning labels, broadcastable to x's batch dimension.
+        n_steps: If not None, use a fixed-step solver with this many steps.
+                 If None, use an adaptive solver with (rtol, atol).
+        clip_range: Optional (lo, hi) tuple to clip x when evaluating the model
+                    and at the final sample.
+        key: PRNGKey. Currently unused (kept purely for API compatibility).
+        return_traj: If True, also return the full trajectory of states.
+        solver: Optional diffrax solver instance. Defaults to Euler for fixed-step
+                and Dopri5 for adaptive.
+        rtol, atol: Tolerances for the adaptive solver.
+        use_tqdm: If True AND n_steps is not None, use a simple Python-level
+                  Euler integrator with a tqdm progress bar instead of diffrax.
+                  This is mainly for debugging (slower, non-JIT).
+
+    Returns:
+        x_0 or (x_0, traj), where x_0 is approximately the sample at t ≈ 0.
+    """
+    # Unused but kept for compatibility
+    del key
+
+    import jax.numpy as jnp
+
+    # We treat x as x_{t=1} (noisiest) and integrate backwards to t ~ 0.
+    t_start = 1.0
+    t_end = 1e-3  # match training t_min; close to 0 but avoids totally unseen times
+
+    def beta_t(t, beta_min=0.1, beta_max=20.0):
+        return beta_min + t * (beta_max - beta_min)
+
+    if solver is None:
+        if n_steps is not None:
+            solver = dfx.Euler()   # fixed-step default
+        else:
+            solver = dfx.Dopri5()  # adaptive default
+
+    batch_size = x.shape[0]
+
+    def ode_fn(t, y, args):
+        # Optionally clip for numerical stability before feeding to the score net.
+        if clip_range is not None:
+            lo, hi = clip_range
+            y_eval = jnp.clip(y, lo, hi)
+        else:
+            y_eval = y
+
+        # Shape time like in training: (B, 1)
+        t_vec = jnp.full((batch_size, 1), t, dtype=y.dtype)
+
+        # Score model: ∇_x log p_t(x)
+        score_pred = apply_fn(y_eval, t_vec, labels)
+
+        beta = beta_t(t)
+
+        # VP probability-flow ODE:
+        # dx/dt = -0.5 * beta(t) * x - 0.5 * beta(t) * score(x, t)
+        drift = -0.5 * beta * y_eval - 0.5 * beta * score_pred
+        return drift
+
+    # -------------------------------------------------------------------------
+    # diffrax-based path (recommended for real sampling).
+    # -------------------------------------------------------------------------
+    if n_steps is None:
+        # Adaptive step size
+        stepsize_controller = dfx.PIDController(rtol=rtol, atol=atol)
+        dt0 = (t_end - t_start) / 500.0  # just an initial guess (negative)
+        max_steps = None
+    else:
+        # Fixed number of (approximate) steps
+        dt0 = (t_end - t_start) / float(n_steps)  # negative
+        stepsize_controller = dfx.ConstantStepSize()
+        max_steps = int(n_steps * 2)  # a bit of slack, like your original
+
+    term = dfx.ODETerm(ode_fn)
+    saveat = dfx.SaveAt(steps=True)
+
+    sol = dfx.diffeqsolve(
+        term,
+        solver=solver,
+        t0=t_start,
+        t1=t_end,
+        dt0=dt0,
+        y0=x,
+        stepsize_controller=stepsize_controller,
+        max_steps=max_steps,
+        saveat=saveat
+    )
+
+    x_final = sol.ys[-1]
+    if clip_range is not None:
+        lo, hi = clip_range
+        x_final = jnp.clip(x_final, lo, hi)
+
+    if not return_traj:
+        return x_final
+
+    traj = np.swapaxes(sol.ys, 0, 1)
+
+    return x_final, traj
+
+
+def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, class_l=None, renormalize=True):
     """Sample batches from a trained DDPM/DDIM model.
 
     Args:
         renormalize: If True, map outputs from [-1, 1] to uint8 [0, 255].
     """
-    method = cfg.integrate.method
-    integr_cfg = cfg.integrate
-    loss_cfg = cfg.loss
-    dtype = jnp.float64 if cfg.x64 else jnp.float32
-    n_samples = int(n_samples)
+    method = cfg.loss.method
+    clip_range = cfg.integrate.clip
 
+    loss_cfg = cfg.loss
+    n_samples = int(n_samples)
     data_shape = tuple(data_shape)
     sample_shape = (n_samples,) + data_shape
-    labels = _prepare_labels(class_l, n_samples)
-
-    sigmas = noise.make_sigma_schedule(
-        loss_cfg.sigma_min,
-        loss_cfg.sigma_max,
-        n_steps,
-        loss_cfg.schedule,
-    ).astype(dtype)
-
-    alphas, alpha_bar, alpha_bar_prev, betas = noise.get_cofficients(sigmas)
-
-    extra_std = integr_cfg.var
-
-    clip_range = getattr(integr_cfg, "clip", (-1.0, 1.0))
 
     key, noise_key = jax.random.split(key)
-    x = jax.random.normal(noise_key, sample_shape, dtype=dtype)
+    x = jax.random.normal(noise_key, sample_shape)
 
     traj = None
     if method == "ddim":
-        x, _, traj = _sample_ddim(
-            apply_fn,
-            x,
-            labels,
-            sigmas,
-            alpha_bar,
-            alphas,
-            sample_shape,
-            clip_range,
-            extra_std,
-            dtype,
-            key,
-            return_traj=return_trajectory,
+        sigmas = noise.make_sigma_schedule(
+            loss_cfg.sigma_min,
+            loss_cfg.sigma_max,
+            n_steps,
+            loss_cfg.schedule,
         )
-    else:
-        x, _, traj = _sample_ddpm(
+        alphas, alpha_bar, alpha_bar_prev, betas = noise.get_cofficients(
+            sigmas)
+        x, traj = _sample_ddim(
             apply_fn,
             x,
-            labels,
+            class_l,
             sigmas,
             alpha_bar,
-            alpha_bar_prev,
             alphas,
-            betas,
             sample_shape,
             clip_range,
-            extra_std,
-            dtype,
             key,
-            return_traj=return_trajectory,
+            return_traj=True,
+        )
+
+    if method == "dsm":
+        x, traj = _sample_dsm(
+            apply_fn,
+            x,
+            class_l,
+            n_steps,
+            clip_range,
+            key,
+            return_traj=True,
+            solver=None,
+            rtol=1e-3,
+            atol=1e-3,
         )
 
     x = np.asarray(x)
 
     if renormalize:
         x = _renormalize_to_uint8(x)
+        traj_stack = _renormalize_to_uint8(traj)
 
-    if return_trajectory:
-        traj_stack = np.stack(traj, axis=0) if traj else None
-        traj_stack = np.swapaxes(traj_stack, 0, 1)
-        if renormalize and traj_stack is not None:
-            traj_stack = _renormalize_to_uint8(traj_stack)
-        return x, traj_stack
-
-    return x
+    return x, traj_stack

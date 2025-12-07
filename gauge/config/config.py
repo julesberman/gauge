@@ -18,7 +18,7 @@ class Network:
 
 @dataclass
 class Optimizer:
-    lr: float = 2e-4
+    lr: float = 1e-4
     iters: int = 20_000
     scheduler: str = 'cos'
     warm_up: bool = False
@@ -33,7 +33,7 @@ class Data:
 
 @dataclass
 class Sample:
-    batch_size: int = 1024
+    batch_size: int = 256
     shuffle: bool = True
     shuffle_buffer_size: Optional[int] = None
     channel_first: bool = False
@@ -43,7 +43,6 @@ class Sample:
 @dataclass
 class Integrate:
     # assume we have ddpm model, sample with ddpm or ddim
-    method: str = "ddim"  # "ddpm", "ddim"
     clip: tuple = (-1, 1)  # clip data at each step
     var: float = 0.0  # varaince of noise in reverse process
 
@@ -55,14 +54,14 @@ class Loss:
     #   - "ddpm" : epsilon-prediction MSE loss
     #   - "dsm"  : denoising score matching
     # ----------------------------------------------------------
-    method: str = "ddpm"  # "ddpm", "dsm"
+    method: str = "dsm"  # "ddpm", "dsm"
 
     # ----------------------------------------------------------
     # Shared noise parameters
     # ----------------------------------------------------------
     sigma_min: float = 0.01        # smallest noise level usable for both
     sigma_max: float = 1.0         # DSM uses full range; DDPM may ignore
-    schedule: str = "linear"  # cosine, linear, geometric
+    schedule: str = "cosine"  # cosine, linear, geometric
 
     # Neutral name: used as timesteps (DDPM) or σ-count (DSM)
     num_levels: int = 1000
@@ -73,6 +72,9 @@ class Gauge:
     run: bool = True
     gauge_a: float = 1.0
     kinetic_a: float = 1.0
+    weighted: bool = False
+    compose: bool = False
+    skew: bool = False
 #    div_dist: str = 'rademacher'  # gaussian, sphere, unit, rademacher
 
 
@@ -93,6 +95,8 @@ class Config:
     dataset: str = 'mnist'
 
     net: Network = field(default_factory=Network)
+    gnet: Network = field(default_factory=lambda: Network(
+        size="s", emb_features=[256, 256]))
 
     optimizer: Optimizer = field(default_factory=Optimizer)
     data: Data = field(default_factory=Data)

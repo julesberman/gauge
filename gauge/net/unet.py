@@ -5,6 +5,8 @@ All modules follow Flax's Module API and can be composed or reused
 independently of the full U-Net.
 """
 
+
+import math
 from dataclasses import field
 from functools import partial
 from typing import Callable
@@ -12,6 +14,83 @@ from typing import Callable
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
+
+
+class FlaxTimesteps(nn.Module):
+    r"""
+    Wrapper Module for sinusoidal Time step Embeddings as described in https://huggingface.co/papers/2006.11239
+
+    Args:
+        dim (`int`, *optional*, defaults to `32`):
+            Time step embedding dimension.
+        flip_sin_to_cos (`bool`, *optional*, defaults to `False`):
+            Whether to flip the sinusoidal function from sine to cosine.
+        freq_shift (`float`, *optional*, defaults to `1`):
+            Frequency shift applied to the sinusoidal embeddings.
+    """
+
+    dim: int = 32
+    flip_sin_to_cos: bool = False
+    freq_shift: float = 1
+
+    @nn.compact
+    def __call__(self, timesteps):
+        return get_sinusoidal_embeddings(
+            timesteps, embedding_dim=self.dim, flip_sin_to_cos=self.flip_sin_to_cos, freq_shift=self.freq_shift
+        )
+
+
+def get_sinusoidal_embeddings(
+    timesteps: jnp.ndarray,
+    embedding_dim: int,
+    freq_shift: float = 1,
+    min_timescale: float = 1,
+    max_timescale: float = 1.0e4,
+    flip_sin_to_cos: bool = False,
+    scale: float = 1.0,
+) -> jnp.ndarray:
+    """Returns the positional encoding (same as Tensor2Tensor).
+
+    Args:
+        timesteps (`jnp.ndarray` of shape `(N,)`):
+            A 1-D array of N indices, one per batch element. These may be fractional.
+        embedding_dim (`int`):
+            The number of output channels.
+        freq_shift (`float`, *optional*, defaults to `1`):
+            Shift applied to the frequency scaling of the embeddings.
+        min_timescale (`float`, *optional*, defaults to `1`):
+            The smallest time unit used in the sinusoidal calculation (should probably be 0.0).
+        max_timescale (`float`, *optional*, defaults to `1.0e4`):
+            The largest time unit used in the sinusoidal calculation.
+        flip_sin_to_cos (`bool`, *optional*, defaults to `False`):
+            Whether to flip the order of sinusoidal components to cosine first.
+        scale (`float`, *optional*, defaults to `1.0`):
+            A scaling factor applied to the positional embeddings.
+
+    Returns:
+        a Tensor of timing signals [N, num_channels]
+    """
+    assert timesteps.ndim == 1, "Timesteps should be a 1d-array"
+    assert embedding_dim % 2 == 0, f"Embedding dimension {embedding_dim} should be even"
+    num_timescales = float(embedding_dim // 2)
+    log_timescale_increment = math.log(
+        max_timescale / min_timescale) / (num_timescales - freq_shift)
+    inv_timescales = min_timescale * \
+        jnp.exp(jnp.arange(num_timescales, dtype=jnp.float32)
+                * -log_timescale_increment)
+    emb = jnp.expand_dims(timesteps, 1) * jnp.expand_dims(inv_timescales, 0)
+
+    # scale embeddings
+    scaled_time = scale * emb
+
+    if flip_sin_to_cos:
+        signal = jnp.concatenate(
+            [jnp.cos(scaled_time), jnp.sin(scaled_time)], axis=1)
+    else:
+        signal = jnp.concatenate(
+            [jnp.sin(scaled_time), jnp.cos(scaled_time)], axis=1)
+    signal = jnp.reshape(signal, [jnp.shape(timesteps)[0], embedding_dim])
+    return signal
 
 
 class FeedFoward(nn.Module):
@@ -239,6 +318,9 @@ class UNet(nn.Module):
     def __call__(self, x, time, class_l):
 
         if time is not None:
+            time_proj = FlaxTimesteps(
+                self.emb_features[0], flip_sin_to_cos=True, freq_shift=0)
+            time = time_proj(jnp.squeeze(time))
             time = FeedFoward(features=self.emb_features)(time)
 
         if class_l is not None:

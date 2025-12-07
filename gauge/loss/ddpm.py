@@ -15,7 +15,8 @@ def make_ddpm_loss(loss_cfg, sigmas, apply_fn):
         batch_size = clean_data.shape[0]
         key_sigma, key_noise = jax.random.split(key)
 
-        sigma_vals, _ = noise.sample_sigmas(key_sigma, sigmas, batch_size)
+        sigma_vals, _, time = noise.sample_sigmas(
+            key_sigma, sigmas, batch_size)
         eps = jax.random.normal(
             key_noise, clean_data.shape, dtype=clean_data.dtype)
 
@@ -25,7 +26,7 @@ def make_ddpm_loss(loss_cfg, sigmas, apply_fn):
             jnp.sqrt(1.0 - alpha_bar), clean_data)
         x_t = clean_scale * clean_data + noise_scale * eps
 
-        pred_eps = apply_fn(params, x_t, sigma_vals, class_l)
+        pred_eps = apply_fn(params, x_t, time, class_l)
         loss = jnp.mean(jnp.square(pred_eps - eps))
         return loss
 

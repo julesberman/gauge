@@ -20,12 +20,12 @@ str_to_opt = {
 }
 
 
-def train_model(cfg: Config, net, dataloader, score_loss, params_init, key_opt, name=''):
+def train_model(cfg: Config, dataloader, loss, params_init, key_opt, name=''):
 
     opt_cfg = cfg.optimizer
 
     has_aux = name == 'gauge'
-    opt_params, loss_history = run_train(net, params_init, dataloader, score_loss, opt_cfg.iters, optimizer=opt_cfg.optimizer,
+    opt_params, loss_history = run_train(params_init, dataloader, loss, opt_cfg.iters, optimizer=opt_cfg.optimizer,
                                          learning_rate=opt_cfg.lr, scheduler=opt_cfg.scheduler, rng=key_opt, has_aux=has_aux)
 
     R.RESULT[f"{name}_opt_params"] = opt_params
@@ -43,7 +43,6 @@ _MULTI_DEVICE = _N_DEVICES > 1
 
 
 def run_train(
-    net,
     params_init,
     dataloader,
     fwd_fn,

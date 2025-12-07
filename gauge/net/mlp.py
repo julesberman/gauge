@@ -11,9 +11,10 @@ class DNN(nn.Module):
     activate_last: bool = False
     residual: bool = False
     n_classes: int = 10
+    use_bias: bool = True
 
     @nn.compact
-    def __call__(self,  x, time, class_l):
+    def __call__(self,  x, time, class_l=None):
         A = nn.gelu
         if time is not None:
             time = nn.Dense(

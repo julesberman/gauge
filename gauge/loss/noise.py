@@ -36,7 +36,9 @@ def make_sigma_schedule(sigma_min, sigma_max, num_levels, schedule):
 def sample_sigmas(key, sigmas, batch_size):
     """Sample noise levels (sigmas) for each element in the batch."""
     idx = jax.random.randint(key, (batch_size, 1), 0, sigmas.shape[0])
-    return sigmas[idx], idx
+
+    time = idx / (sigmas.shape[0] - 1)
+    return sigmas[idx], idx, time
 
 
 def broadcast_to_match(values, ref):
@@ -64,3 +66,24 @@ def get_cofficients(sigmas):
     betas = 1.0 - alphas
 
     return alphas, alpha_bar, alpha_bar_prev, betas
+
+
+def vp_t_to_sigma(t, beta_min=0.1, beta_max=20.0):
+    integ = beta_min * t + 0.5 * (beta_max - beta_min) * t**2
+    alpha = jnp.exp(-0.5 * integ)
+    sigma = jnp.sqrt(1.0 - alpha**2)
+    return sigma
+
+
+def sample_vp_sde_sigmas(key, batch_size,
+                         beta_min=0.1, beta_max=20.0,
+                         t_min=1e-3, t_max=1.0):
+    # Sample times strictly in (t_min, t_max]
+    t = jax.random.uniform(
+        key, (batch_size, 1),
+        minval=t_min, maxval=t_max
+    )
+
+    sigma = vp_t_to_sigma(t, beta_min, beta_max)
+
+    return sigma, t
