@@ -151,10 +151,11 @@ def _sample_dsm(
         # Fixed number of (approximate) steps
         dt0 = (t_end - t_start) / float(n_steps)  # negative
         stepsize_controller = dfx.ConstantStepSize()
-        max_steps = int(n_steps * 2)  # a bit of slack, like your original
+        max_steps = int(n_steps)*2  # a bit of slack, like your original
 
     term = dfx.ODETerm(ode_fn)
-    saveat = dfx.SaveAt(steps=True)
+    ts = jnp.linspace(t_start, t_end, n_steps)
+    saveat = dfx.SaveAt(ts=ts)
 
     sol = dfx.diffeqsolve(
         term,
@@ -168,7 +169,8 @@ def _sample_dsm(
         saveat=saveat
     )
 
-    x_final = sol.ys[-1]
+    sol = sol.ys  # [:-1]  # idk bug
+    x_final = sol[-1]
     if clip_range is not None:
         lo, hi = clip_range
         x_final = jnp.clip(x_final, lo, hi)
@@ -176,7 +178,7 @@ def _sample_dsm(
     if not return_traj:
         return x_final
 
-    traj = np.swapaxes(sol.ys, 0, 1)
+    traj = np.swapaxes(sol, 0, 1)
 
     return x_final, traj
 
@@ -239,6 +241,6 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
 
     if renormalize:
         x = _renormalize_to_uint8(x)
-        traj_stack = _renormalize_to_uint8(traj)
+        traj = _renormalize_to_uint8(traj)
 
-    return x, traj_stack
+    return x, traj

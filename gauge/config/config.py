@@ -14,6 +14,8 @@ class Network:
     arch: str = "unet"
     size: str = "m"
     emb_features: list[int] = field(default_factory=lambda: [512, 512])
+    n_basis: int = 16
+    kernel: int = 3
 
 
 @dataclass
@@ -72,16 +74,15 @@ class Gauge:
     run: bool = True
     gauge_a: float = 1.0
     kinetic_a: float = 1.0
-    weighted: bool = False
+    end_a: float = 1.0
     compose: bool = False
-    skew: bool = False
 #    div_dist: str = 'rademacher'  # gaussian, sphere, unit, rademacher
 
 
 @dataclass
 class Test:
     n_steps: list[int] = field(default_factory=lambda: [
-                               2, 5, 10, 25, 50, 100, 250])
+                               2, 5, 10, 25, 50, 100, 250, 500, 1000])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16

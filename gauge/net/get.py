@@ -2,6 +2,7 @@ import jax
 import numpy as np
 
 from gauge.net.mlp import DNN
+from gauge.net.skew import SkewNet
 from gauge.net.unet import UNet
 from gauge.utils.tools import pshape
 
@@ -12,7 +13,9 @@ def get_arch(net_cfg, out_channels):
         net = get_unet_size(net_cfg.size, out_channels, net_cfg.emb_features)
     if net_cfg.arch == "mlp":
         net = DNN(width=128, depth=7, out_features=out_channels)
-
+    if net_cfg.arch == "skew":
+        k = net_cfg.kernel
+        net = SkewNet(n_basis=net_cfg.n_basis, kernel_size=(k, k))
     return net
 
 

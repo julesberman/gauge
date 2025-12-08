@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 
 
-class FlaxTimesteps(nn.Module):
+class PeriodicTimestep(nn.Module):
     r"""
     Wrapper Module for sinusoidal Time step Embeddings as described in https://huggingface.co/papers/2006.11239
 
@@ -318,7 +318,7 @@ class UNet(nn.Module):
     def __call__(self, x, time, class_l):
 
         if time is not None:
-            time_proj = FlaxTimesteps(
+            time_proj = PeriodicTimestep(
                 self.emb_features[0], flip_sin_to_cos=True, freq_shift=0)
             time = time_proj(jnp.squeeze(time))
             time = FeedFoward(features=self.emb_features)(time)
