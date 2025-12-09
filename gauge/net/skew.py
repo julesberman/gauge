@@ -28,7 +28,7 @@ class SkewNet(nn.Module):
       scale_init: initial magnitude for the overall operator (via log_scale).
     """
     kernel_size: Tuple[int, int] = (3, 3)
-    n_basis: int = 16
+    n_basis: int = 32
     time_embed_dim: int = 128
     emb_features: list = field(default_factory=lambda: [256, 256])
 
@@ -117,4 +117,4 @@ class SkewNet(nn.Module):
         a = jax.vmap(single_sample_conv, in_axes=(0, 0))(
             x, skew_kernels)  # (B, H, W, C)
 
-        return a - x
+        return a

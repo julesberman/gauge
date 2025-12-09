@@ -176,9 +176,12 @@ def run_train(
 
         if has_aux:
             loss_value, aux = loss_out
-            des = f"loss: {loss_value:.4f}"
+            FIELD_WIDTH = 12
+            segments = [f"loss: {loss_value:10.4f}".ljust(FIELD_WIDTH)]
             for k, v in aux.items():
-                des = f'{des} | {k}: {v:.4f}'
+                segments.append(f"{k}: {v:10.4f}".ljust(FIELD_WIDTH))
+            des = " | ".join(segments)
+
             pbar.set_description(des)
         else:
             loss_value = loss_out

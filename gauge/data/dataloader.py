@@ -1,18 +1,39 @@
 import numpy as np
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from gauge.config.config import Config
 from gauge.utils.tools import get_cpu_count
 
 
-def _normalize_images(x: np.ndarray, channel_first: bool) -> np.ndarray:
-    if channel_first:
-        x = np.transpose(x, (0, 3, 1, 2))  # [B, C, H, W]
-    return (x - 127.5) / 127.5
+class InMemoryDataSource:
+    def __init__(self, images, labels):
+        self._images = images
+        self._labels = labels
+
+    def __len__(self):
+        return self._images.shape[0]
+
+    def __getitem__(self, i):
+        if self._labels is None:
+            return self._images[i]
+        else:
+            return self._images[i],  self._labels[i]
 
 
-def materialize_data_source(ds, use_tqdm=False):
+def SimpleBatcher(X, y=None, batch_size=32, seed=None):
+    rng = np.random.default_rng(seed)
+    n = len(X)
+
+    while True:
+        idx = rng.integers(0, n, size=batch_size)  # with replacement
+        if y is None:
+            yield X[idx], None
+        else:
+            yield X[idx], y[idx]
+
+
+def materialize_data_source(ds, use_tqdm=False, normalize_img=True):
     """
     Materialize a tfds-like data_source into RAM as numpy arrays.
     """
@@ -44,19 +65,8 @@ def materialize_data_source(ds, use_tqdm=False):
     images = np.stack(images, axis=0)
     labels = np.stack(labels, axis=0) if has_label else None
 
-    class InMemoryDataSource:
-        def __init__(self, images, labels):
-            self._images = images
-            self._labels = labels
-
-        def __len__(self):
-            return self._images.shape[0]
-
-        def __getitem__(self, i):
-            if self._labels is None:
-                return {"image": self._images[i]}
-            else:
-                return {"image": self._images[i], "label": self._labels[i]}
+    if normalize_img:
+        images = (images - 127.5) / 127.5
 
     return InMemoryDataSource(images, labels)
 
@@ -84,45 +94,39 @@ def get_dataloader(
 
     use_labels = cfg.data.class_labels
     batch_size = cfg.sample.batch_size
-    channel_first = cfg.sample.channel_first
+    normalize = cfg.data.normalize
     shuffle = cfg.sample.shuffle if cfg.sample.shuffle is not None else shuffle
+    use_dl = cfg.sample.use_dl
+
+    if not use_dl:
+        return SimpleBatcher(dataset, batch_size=batch_size)
 
     if cfg.sample.materialize:
-        dataset = materialize_data_source(dataset, use_tqdm=True)
+        dataset = materialize_data_source(
+            dataset, use_tqdm=True, normalize_img=normalize)
 
     n_cpus = get_cpu_count()
     num_workers = max(1, n_cpus - 4)
     print(f"found {n_cpus} cpu cores, using {num_workers} workers")
 
-    # Map-style dataset already implemented by TFDS, so we just need a sampler.
-    sampler = RandomSampler(dataset) if shuffle else SequentialSampler(dataset)
-
-    def collate_with_labels(batch):
-        # batch: list of dicts {"image": np.ndarray, "label": int}
-        images = [np.asarray(b["image"], dtype=np.float32) for b in batch]
-        labels = [np.asarray(b["label"], dtype=np.int32) for b in batch]
-
-        x = np.stack(images, axis=0)
-        x = _normalize_images(x, channel_first)
-        y = np.asarray(labels)
-        return x, y
-
-    def collate_without_labels(batch):
-        images = [np.asarray(b["image"], dtype=np.float32) for b in batch]
-        x = np.stack(images, axis=0)
-        x = _normalize_images(x, channel_first)
-        return x
-
-    collate_fn = collate_with_labels if use_labels else collate_without_labels
+    def numpy_collate(batch):
+        # batch: list of items, each item is either
+        #   (image,) OR (image, label)
+        if isinstance(batch[0], tuple):
+            # ZIP across batch → stack each field
+            batch = list(zip(*batch))
+            return tuple(np.stack(field) for field in batch)
+        else:
+            return np.stack(batch)
 
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
-        sampler=sampler,
         num_workers=num_workers,
-        collate_fn=collate_fn,
         prefetch_factor=4,
-        drop_last=True
+        drop_last=True,
+        shuffle=True,
+        collate_fn=numpy_collate,
     )
 
     # Wrap the (finite) DataLoader into an infinite generator

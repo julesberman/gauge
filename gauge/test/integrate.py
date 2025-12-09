@@ -98,23 +98,16 @@ def _sample_dsm(
     Returns:
         x_0 or (x_0, traj), where x_0 is approximately the sample at t ≈ 0.
     """
-    # Unused but kept for compatibility
-    del key
-
-    import jax.numpy as jnp
 
     # We treat x as x_{t=1} (noisiest) and integrate backwards to t ~ 0.
     t_start = 1.0
     t_end = 1e-3  # match training t_min; close to 0 but avoids totally unseen times
 
-    def beta_t(t, beta_min=0.1, beta_max=20.0):
-        return beta_min + t * (beta_max - beta_min)
-
     if solver is None:
-        if n_steps is not None:
-            solver = dfx.Euler()   # fixed-step default
-        else:
+        if n_steps == -1 or n_steps is None:
             solver = dfx.Dopri5()  # adaptive default
+        else:
+            solver = dfx.Euler()   # fixed-step default
 
     batch_size = x.shape[0]
 
@@ -128,34 +121,30 @@ def _sample_dsm(
 
         # Shape time like in training: (B, 1)
         t_vec = jnp.full((batch_size, 1), t, dtype=y.dtype)
-
-        # Score model: ∇_x log p_t(x)
         score_pred = apply_fn(y_eval, t_vec, labels)
+        beta_t = noise.vp_t_to_beta(t)
 
-        beta = beta_t(t)
-
-        # VP probability-flow ODE:
-        # dx/dt = -0.5 * beta(t) * x - 0.5 * beta(t) * score(x, t)
-        drift = -0.5 * beta * y_eval - 0.5 * beta * score_pred
+        drift = -0.5 * beta_t * (y_eval + score_pred)
         return drift
 
     # -------------------------------------------------------------------------
     # diffrax-based path (recommended for real sampling).
     # -------------------------------------------------------------------------
-    if n_steps is None:
+    if n_steps == -1 or n_steps is None:
         # Adaptive step size
         stepsize_controller = dfx.PIDController(rtol=rtol, atol=atol)
         dt0 = (t_end - t_start) / 500.0  # just an initial guess (negative)
-        max_steps = None
+        max_steps = 1000
+        saveat = dfx.SaveAt(steps=True)
     else:
         # Fixed number of (approximate) steps
         dt0 = (t_end - t_start) / float(n_steps)  # negative
         stepsize_controller = dfx.ConstantStepSize()
         max_steps = int(n_steps)*2  # a bit of slack, like your original
+        ts = jnp.linspace(t_start, t_end, n_steps)
+        saveat = dfx.SaveAt(ts=ts)
 
     term = dfx.ODETerm(ode_fn)
-    ts = jnp.linspace(t_start, t_end, n_steps)
-    saveat = dfx.SaveAt(ts=ts)
 
     sol = dfx.diffeqsolve(
         term,
@@ -168,8 +157,8 @@ def _sample_dsm(
         max_steps=max_steps,
         saveat=saveat
     )
-
-    sol = sol.ys  # [:-1]  # idk bug
+    print(f'integrated w/ num_steps: {sol.stats["num_steps"]}')
+    sol = sol.ys
     x_final = sol[-1]
     if clip_range is not None:
         lo, hi = clip_range
@@ -224,6 +213,16 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
         )
 
     if method == "dsm":
+
+        # x, traj = _sample_dsm_euler(
+        #     apply_fn,
+        #     x,
+        #     class_l,
+        #     n_steps,
+        #     key,
+        #     return_traj=True,
+        # )
+
         x, traj = _sample_dsm(
             apply_fn,
             x,

@@ -6,7 +6,7 @@ import tensorflow_datasets as tfds
 from gauge.config.config import Config
 
 
-def get_dataset(config: Config):
+def get_image_dataset(config: Config):
     """Download TFDS splits as numpy arrays normalized to [-1, 1]."""
     name = config.dataset.lower()
     tfds_name, image_shape, has_labels = _resolve_dataset(name)

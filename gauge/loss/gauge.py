@@ -16,13 +16,15 @@ def get_combine_V(cfg: Config, Score_net, score_params, G_net, G_params):
         def apply_V(x, time_inp, labels):
             alpha_bar = sigma_to_alpha_bar(jnp.squeeze(time_inp))
             beta = jnp.sqrt(1-alpha_bar)
-            beta = beta[:, None, None, None]
+            beta = noise.broadcast_to_match(beta, x)
             return Score_net.apply(score_params, x, time_inp, labels) - beta * G_net.apply(G_params, x, time_inp, labels)
 
     if cfg.loss.method == 'dsm':
         @jit
         def apply_V(x, time_inp, labels):
-            return Score_net.apply(score_params, x, time_inp, labels) + G_net.apply(G_params, x, time_inp, labels)
+            beta = noise.vp_t_to_beta(jnp.squeeze(time_inp))
+            beta = noise.broadcast_to_match(beta, x)
+            return Score_net.apply(score_params, x, time_inp, labels) + (-2/beta)*G_net.apply(G_params, x, time_inp, labels)
 
     return apply_V
 
@@ -133,89 +135,70 @@ def get_gauge_dsm_loss(cfg: Config, apply_G, apply_score):
     gauge_a = cfg.gauge.gauge_a
     end_a = cfg.gauge.end_a
 
-    def beta_t(t, beta_min=0.1, beta_max=20.0):
-        return beta_min + t * (beta_max - beta_min)
-
     def loss_fn(params, x0, class_l, key):
 
         # set_up
+        final_loss = 0.0
         batch_size = x0.shape[0]
-        data_shape = x0.shape
+        x_shape = x0.shape
+        x0 = x0.reshape(batch_size, -1)
+        aux = {}
 
-        key_sigma, key_noise, div_key, skey = jax.random.split(key, num=4)
-        sigma_vals, t_vals = noise.sample_vp_sde_sigmas(key_sigma, batch_size)
-        sigma_bc = noise.broadcast_to_match(sigma_vals, x0)
-
+        key_sigma, key_noise, div_key, ekey = jax.random.split(key, num=4)
+        sigmas, t_vals = noise.sample_vp_sde_sigmas(key_sigma, batch_size)
+        alphas = jnp.sqrt(1.0 - jnp.square(sigmas))
+        beta = noise.vp_t_to_beta(t_vals)
         eps = jax.random.normal(key_noise, x0.shape)
-        alpha_vals = jnp.sqrt(1.0 - jnp.square(sigma_vals))
-        alpha_bc = noise.broadcast_to_match(alpha_vals, x0)
-
-        x_t = alpha_bc * x0 + sigma_bc * eps
-        x_t_flat = x_t.reshape(batch_size, -1)
+        x_t = alphas * x0 + sigmas * eps
 
         # get score field
         score_field = apply_score(
-            x_t, t_vals, class_l).reshape(batch_size, -1)
+            x_t.reshape(x_shape), t_vals, class_l).reshape(batch_size, -1)
 
         # get gauge field
-        G_field = apply_G(params, x_t, t_vals,
+        G_field = apply_G(params, x_t.reshape(x_shape), t_vals,
                           class_l).reshape(batch_size, -1)
 
-        beta = beta_t(t_vals)
-        total_field = -0.5 * beta * x_t_flat - \
-            0.5 * beta * (score_field+G_field)
+        total_field = -0.5 * beta * (x_t + score_field + G_field)
 
-        def flat_G(x_flat, sig, cls):
-            x = x_flat.reshape(data_shape)
-            y = apply_G(params, x, sig, cls)
-            return y.reshape(batch_size, -1)
+        # loss gauge
+        if gauge_a != 0:
+            def flat_G(x_flat, sig, cls):
+                x = x_flat.reshape(x_shape)
+                y = apply_G(params, x, sig, cls)
+                return y.reshape(batch_size, -1)
 
-        div_G = hutch_div(flat_G)(x_t_flat, t_vals, class_l, key=div_key)
-        G_score = vmap(jnp.dot)(G_field, score_field)
+            div_G = hutch_div(flat_G)(x_t, t_vals, class_l, key=div_key)
+            G_score = vmap(jnp.dot)(G_field, score_field)
 
-        # losses
-        loss_gauge = div_G + G_score
-        loss_gauge = jnp.mean(loss_gauge**2)
+            loss_gauge = div_G + G_score
+            loss_gauge = jnp.mean(loss_gauge**2)
+            final_loss += gauge_a*loss_gauge
+            aux['gae'] = loss_gauge
 
-        loss_kin = jnp.mean(jnp.sum(total_field**2, axis=-1))
+        # loss kin
+        if kinetic_a != 0:
+            weights = jnp.squeeze(jnp.square(sigmas))
+            loss_kin = jnp.mean(jnp.sum(total_field**2, axis=-1)*weights)
+            final_loss += kinetic_a*loss_kin
+            aux['kin'] = loss_kin
 
-        # align to end
-        dt = jax.random.uniform(skey, minval=-0.48, maxval=0.48)
-        t_vals = t_vals + dt
-        t_vals = jnp.clip(t_vals, 1e-3, 1.0)
+        # # align to end
+        if end_a != 0:
+            dt = jax.random.uniform(ekey, minval=-0.4, maxval=0.4)
+            t_vals = jnp.clip(t_vals + dt, 1e-3, 1.0)
+            alphas = jnp.sqrt(1.0 - jnp.square(sigmas))
+            x_t = alphas * x0 + sigmas * eps
 
-        sigma_vals = noise.vp_t_to_sigma(t_vals)
-        sigma_bc = noise.broadcast_to_match(sigma_vals, x0)
-
-        alpha_vals = jnp.sqrt(jnp.clip(1.0 - jnp.square(sigma_vals), 0.0, 1.0))
-        alpha_bc = noise.broadcast_to_match(alpha_vals, x0)
-
-        x_t = alpha_bc * x0 + sigma_bc * eps
-        x_t_flat = x_t.reshape(batch_size, -1)
-        score_field = apply_score(
-            x_t, t_vals, class_l).reshape(batch_size, -1)
-        G_field = apply_G(params, x_t, t_vals,
-                          class_l).reshape(batch_size, -1)
-        beta = beta_t(t_vals)
-        total_field2 = -0.5 * beta * x_t_flat - \
-            0.5 * beta * (score_field+G_field)
-        loss_end = align_vecs(total_field, total_field2)
-
-        # combine
-        final_loss = gauge_a*loss_gauge + kinetic_a*loss_kin + end_a*loss_end
-
-        # aux = {'gae': loss_gauge, 'kin': loss_kin}
-
-        aux = {
-            'gae': loss_gauge,
-            'kin': loss_kin,
-            'end': loss_end,
-            'div': jnp.mean(div_G**2),
-            'gscore': jnp.mean(G_score**2),
-            # 'sigma': jnp.mean(sigma_vals),
-            # 'w_gae':  jnp.mean(weights*loss_gauge**2),
-            # 'w_kin':  jnp.mean(weights*jnp.sum(total_field**2, axis=-1))
-        }
+            score_field = apply_score(
+                x_t.reshape(x_shape), t_vals, class_l).reshape(batch_size, -1)
+            G_field = apply_G(params, x_t.reshape(x_shape), t_vals,
+                              class_l).reshape(batch_size, -1)
+            beta = noise.vp_t_to_beta(t_vals)
+            total_field2 = -0.5 * beta * (x_t + score_field + G_field)
+            loss_end = align_vecs(total_field, total_field2)
+            final_loss += loss_end*end_a
+            aux['end'] = loss_end
 
         return final_loss, aux
 

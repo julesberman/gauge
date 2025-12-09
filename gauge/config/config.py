@@ -29,7 +29,7 @@ class Optimizer:
 
 @dataclass
 class Data:
-    normalize: str = '-11'
+    normalize: bool = True
     class_labels: bool = False
 
 
@@ -40,27 +40,20 @@ class Sample:
     shuffle_buffer_size: Optional[int] = None
     channel_first: bool = False
     materialize: bool = True
+    use_dl: bool = True
 
 
 @dataclass
 class Integrate:
     # assume we have ddpm model, sample with ddpm or ddim
-    clip: tuple = (-1, 1)  # clip data at each step
+    clip: tuple | None = (-1, 1)  # clip data at each step
     var: float = 0.0  # varaince of noise in reverse process
 
 
 @dataclass
 class Loss:
-    # ----------------------------------------------------------
-    # Two supported loss types:
-    #   - "ddpm" : epsilon-prediction MSE loss
-    #   - "dsm"  : denoising score matching
-    # ----------------------------------------------------------
     method: str = "dsm"  # "ddpm", "dsm"
 
-    # ----------------------------------------------------------
-    # Shared noise parameters
-    # ----------------------------------------------------------
     sigma_min: float = 0.01        # smallest noise level usable for both
     sigma_max: float = 1.0         # DSM uses full range; DDPM may ignore
     schedule: str = "cosine"  # cosine, linear, geometric
@@ -82,12 +75,13 @@ class Gauge:
 @dataclass
 class Test:
     n_steps: list[int] = field(default_factory=lambda: [
-                               2, 5, 10, 25, 50, 100, 250, 500, 1000])
+                               -1, 2, 5, 10, 25, 50, 100, 250, 500, 1000])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16
     save_trajectories: bool = False
     plot: bool = True
+    renormalize: bool = True
 
 
 @dataclass
@@ -145,6 +139,18 @@ hydra_config = {
 }
 cs = ConfigStore.instance()
 cs.store(name="default", node=Config)
+
+toy_cfg = Config(
+    dataset="toy_swiss",
+    data=Data(normalize=False),
+    sample=Sample(materialize=True, batch_size=2048, use_dl=False),
+    net=Network(arch='mlp'),
+    gnet=Network(arch='mlp'),
+    optimizer=Optimizer(lr=5e-4, iters=20_000),
+    test=Test(n_trajectories=10_000, n_samples=10_000, renormalize=False),
+    integrate=Integrate(clip=None)
+)
+cs.store(name="toy", node=toy_cfg)
 
 
 def get_outpath() -> Path:

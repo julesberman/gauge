@@ -68,6 +68,10 @@ def get_cofficients(sigmas):
     return alphas, alpha_bar, alpha_bar_prev, betas
 
 
+def vp_t_to_beta(t, beta_min=0.1, beta_max=20.0):
+    return beta_min + t * (beta_max - beta_min)
+
+
 def vp_t_to_sigma(t, beta_min=0.1, beta_max=20.0):
     integ = beta_min * t + 0.5 * (beta_max - beta_min) * t**2
     alpha = jnp.exp(-0.5 * integ)

@@ -8,7 +8,7 @@ import gauge.io.result as R
 from gauge.config.config import Config
 from gauge.config.setup import setup
 from gauge.data.dataloader import get_dataloader
-from gauge.data.dataset import get_dataset
+from gauge.data.get import get_dataset
 from gauge.io.load import load
 from gauge.io.save import save_results
 from gauge.loss.gauge import get_combine_V, get_gauge_loss
@@ -32,14 +32,18 @@ def run(cfg: Config) -> None:
         load_cfg, df = load(cfg.load_score)
         score_params = df['score_opt_params']
         R.RESULT["score_opt_params"] = score_params
+
+        @jit
+        def apply_score(*args):
+            return Score_net.apply(score_params, *args)
     else:
-        score_params = train_model(cfg, Score_net, dataloader,
+        score_params = train_model(cfg, dataloader,
                                    score_loss, S_params_init, key_opt, name='score')
 
-    @jit
-    def apply_score(*args):
-        return Score_net.apply(score_params, *args)
-    run_test(cfg, apply_score, dataset, data_shape, key_test, name='score')
+        @jit
+        def apply_score(*args):
+            return Score_net.apply(score_params, *args)
+        run_test(cfg, apply_score, dataset, data_shape, key_test, name='score')
 
     if cfg.gauge.run:
 
