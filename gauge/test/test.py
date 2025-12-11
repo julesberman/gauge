@@ -10,7 +10,7 @@ from gauge.test.integrate import sample_model
 from gauge.utils.plot import plot_grid, plot_grid_movie, scatter_movie
 
 
-def run_test(cfg: Config, apply_fn, dataset, data_shape, key, name=''):
+def run_test(cfg: Config, apply_fn, noise_schedule, dataset, data_shape, key, name=''):
 
     out_path = get_outpath()
 
@@ -20,8 +20,9 @@ def run_test(cfg: Config, apply_fn, dataset, data_shape, key, name=''):
     print("sampling score model...")
     for steps in n_steps:
 
-        samples, trajectories = sample_model(cfg, apply_fn,
+        samples, trajectories = sample_model(cfg, noise_schedule, apply_fn,
                                              cfg.test.n_samples, steps, data_shape, key, class_l=None, renormalize=cfg.test.renormalize)
+
         trajectories = trajectories[:cfg.test.n_trajectories]
 
         samples = np.nan_to_num(samples, nan=0.0, posinf=1e9, neginf=-1e9)

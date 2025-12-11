@@ -8,7 +8,7 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from gauge.config.config import Config
-from gauge.loss import noise
+from gauge.loss.noise import NoiseSchedule
 
 
 def _clip_if_needed(x, clip_bounds):
@@ -66,6 +66,7 @@ def _sample_dsm(
     apply_fn,
     x,
     labels,
+    schedule: NoiseSchedule,
     n_steps,
     clip_range,
     key,
@@ -112,21 +113,15 @@ def _sample_dsm(
     batch_size = x.shape[0]
 
     def ode_fn(t, y, args):
-        # Optionally clip for numerical stability before feeding to the score net.
         if clip_range is not None:
             lo, hi = clip_range
-            y_eval = jnp.clip(y, lo, hi)
-        else:
-            y_eval = y
+            y = jnp.clip(y, lo, hi)
 
         # Shape time like in training: (B, 1)
-        t_vec = jnp.full((batch_size, 1), t, dtype=y.dtype)
-        score_pred = apply_fn(y_eval, t_vec, labels)
-        beta_t = noise.vp_t_to_beta(t)
-
-        drift = -0.5 * beta_t * (y_eval + score_pred)
+        t_vec = jnp.full((batch_size, 1), t)
+        score_pred = apply_fn(y, t_vec, labels)
+        drift = schedule.pf_ode_vt(y, t, score_pred)
         return drift
-
     # -------------------------------------------------------------------------
     # diffrax-based path (recommended for real sampling).
     # -------------------------------------------------------------------------
@@ -172,16 +167,14 @@ def _sample_dsm(
     return x_final, traj
 
 
-def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, class_l=None, renormalize=True):
+def sample_model(cfg: Config, noise_schedule, apply_fn, n_samples, n_steps, data_shape, key, class_l=None, renormalize=True):
     """Sample batches from a trained DDPM/DDIM model.
 
     Args:
         renormalize: If True, map outputs from [-1, 1] to uint8 [0, 255].
     """
-    method = cfg.loss.method
+    method = cfg.score.method
     clip_range = cfg.integrate.clip
-
-    loss_cfg = cfg.loss
     n_samples = int(n_samples)
     data_shape = tuple(data_shape)
     sample_shape = (n_samples,) + data_shape
@@ -190,43 +183,13 @@ def sample_model(cfg: Config, apply_fn, n_samples, n_steps, data_shape, key, cla
     x = jax.random.normal(noise_key, sample_shape)
 
     traj = None
-    if method == "ddim":
-        sigmas = noise.make_sigma_schedule(
-            loss_cfg.sigma_min,
-            loss_cfg.sigma_max,
-            n_steps,
-            loss_cfg.schedule,
-        )
-        alphas, alpha_bar, alpha_bar_prev, betas = noise.get_cofficients(
-            sigmas)
-        x, traj = _sample_ddim(
-            apply_fn,
-            x,
-            class_l,
-            sigmas,
-            alpha_bar,
-            alphas,
-            sample_shape,
-            clip_range,
-            key,
-            return_traj=True,
-        )
-
     if method == "dsm":
-
-        # x, traj = _sample_dsm_euler(
-        #     apply_fn,
-        #     x,
-        #     class_l,
-        #     n_steps,
-        #     key,
-        #     return_traj=True,
-        # )
 
         x, traj = _sample_dsm(
             apply_fn,
             x,
             class_l,
+            noise_schedule,
             n_steps,
             clip_range,
             key,

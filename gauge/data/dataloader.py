@@ -68,7 +68,7 @@ def materialize_data_source(ds, use_tqdm=False, normalize_img=True):
     if normalize_img:
         images = (images - 127.5) / 127.5
 
-    return InMemoryDataSource(images, labels)
+    return images, labels
 
 
 def get_dataloader(
@@ -96,14 +96,13 @@ def get_dataloader(
     batch_size = cfg.sample.batch_size
     normalize = cfg.data.normalize
     shuffle = cfg.sample.shuffle if cfg.sample.shuffle is not None else shuffle
-    use_dl = cfg.sample.use_dl
-
-    if not use_dl:
-        return SimpleBatcher(dataset, batch_size=batch_size)
 
     if cfg.sample.materialize:
-        dataset = materialize_data_source(
+        images, labels = materialize_data_source(
             dataset, use_tqdm=True, normalize_img=normalize)
+        if not use_labels:
+            labels = None
+        return SimpleBatcher(images, y=labels, batch_size=batch_size)
 
     n_cpus = get_cpu_count()
     num_workers = max(1, n_cpus - 4)

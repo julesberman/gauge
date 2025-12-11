@@ -1,6 +1,7 @@
 import jax
 import numpy as np
 
+from gauge.config.config import Config
 from gauge.net.mlp import DNN
 from gauge.net.skew import SkewNet
 from gauge.net.unet import UNet
@@ -49,13 +50,18 @@ def get_unet_size(size, out_channels, emb_features):
     return net
 
 
-def get_network(net_cfg, dataloader, key):
+def get_network(cfg: Config, dataloader, key):
+
+    net_cfg = cfg.net
+    n_fields = cfg.gauge.n_fields
 
     x_data, class_l = next(iter(dataloader))
 
     pshape(x_data, class_l, title='dataloader sample')
 
     out_channels = x_data.shape[-1]
+    out_channels = out_channels*n_fields
+
     time = np.ones((x_data.shape[0], 1))
 
     net = get_arch(net_cfg, out_channels)

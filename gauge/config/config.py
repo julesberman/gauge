@@ -14,8 +14,6 @@ class Network:
     arch: str = "unet"
     size: str = "m"
     emb_features: list[int] = field(default_factory=lambda: [512, 512])
-    n_basis: int = 16
-    kernel: int = 3
 
 
 @dataclass
@@ -38,9 +36,7 @@ class Sample:
     batch_size: int = 256
     shuffle: bool = True
     shuffle_buffer_size: Optional[int] = None
-    channel_first: bool = False
     materialize: bool = True
-    use_dl: bool = True
 
 
 @dataclass
@@ -51,12 +47,12 @@ class Integrate:
 
 
 @dataclass
-class Loss:
+class Score:
     method: str = "dsm"  # "ddpm", "dsm"
 
-    sigma_min: float = 0.01        # smallest noise level usable for both
-    sigma_max: float = 1.0         # DSM uses full range; DDPM may ignore
-    schedule: str = "cosine"  # cosine, linear, geometric
+    kind: str = "ve"  # vp or ve
+    noise_min: float = -1  # -1 auto pick based on kind
+    noise_max: float = -1  # -1 auto pick based on kind
 
     # Neutral name: used as timesteps (DDPM) or σ-count (DSM)
     num_levels: int = 1000
@@ -65,17 +61,17 @@ class Loss:
 @dataclass
 class Gauge:
     run: bool = True
-    gauge_a: float = 1.0
-    kinetic_a: float = 1.0
-    end_a: float = 1.0
-    compose: bool = False
-#    div_dist: str = 'rademacher'  # gaussian, sphere, unit, rademacher
+    n_fields: int = 1
+    ortho_loss: str = 'cos'
+    ortho_a: float = 1.0
+    freeze_0: bool = False
 
 
 @dataclass
 class Test:
-    n_steps: list[int] = field(default_factory=lambda: [
-                               -1, 2, 5, 10, 25, 50, 100, 250, 500, 1000])
+    # n_steps: list[int] = field(default_factory=lambda: [
+    #                            -1, 2, 5, 10, 25, 50, 100, 250, 500, 1000])
+    n_steps: list[int] = field(default_factory=lambda: [10, 50, 100])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16
@@ -96,7 +92,7 @@ class Config:
     optimizer: Optimizer = field(default_factory=Optimizer)
     data: Data = field(default_factory=Data)
     sample: Sample = field(default_factory=Sample)
-    loss: Loss = field(default_factory=Loss)
+    score: Score = field(default_factory=Score)
     gauge: Gauge = field(default_factory=Gauge)
 
     integrate: Integrate = field(default_factory=Integrate)
@@ -143,7 +139,7 @@ cs.store(name="default", node=Config)
 toy_cfg = Config(
     dataset="toy_swiss",
     data=Data(normalize=False),
-    sample=Sample(materialize=True, batch_size=2048, use_dl=False),
+    sample=Sample(materialize=True, batch_size=2048),
     net=Network(arch='mlp'),
     gnet=Network(arch='mlp'),
     optimizer=Optimizer(lr=5e-4, iters=20_000),

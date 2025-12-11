@@ -1,205 +1,47 @@
 
-import jax
+
 import jax.numpy as jnp
-from jax import jit, vmap
+from einops import rearrange
+from jax import vmap
 
 from gauge.config.config import Config
-from gauge.loss import noise
-from gauge.loss.noise import sigma_to_alpha_bar
-from gauge.utils.tools import hutch_div
 
 
-def get_combine_V(cfg: Config, Score_net, score_params, G_net, G_params):
+def get_ortho_loss(cfg: Config):
 
-    if cfg.loss.method == 'ddim':
-        @jit
-        def apply_V(x, time_inp, labels):
-            alpha_bar = sigma_to_alpha_bar(jnp.squeeze(time_inp))
-            beta = jnp.sqrt(1-alpha_bar)
-            beta = noise.broadcast_to_match(beta, x)
-            return Score_net.apply(score_params, x, time_inp, labels) - beta * G_net.apply(G_params, x, time_inp, labels)
-
-    if cfg.loss.method == 'dsm':
-        @jit
-        def apply_V(x, time_inp, labels):
-            beta = noise.vp_t_to_beta(jnp.squeeze(time_inp))
-            beta = noise.broadcast_to_match(beta, x)
-            return Score_net.apply(score_params, x, time_inp, labels) + (-2/beta)*G_net.apply(G_params, x, time_inp, labels)
-
-    return apply_V
-
-
-def compute_A_B(alpha_bar, alpha_bar_prev):
-    c = jnp.sqrt(alpha_bar)
-    c_prev = jnp.sqrt(alpha_bar_prev)
-
-    sigma = jnp.sqrt(1.0 - alpha_bar)
-    sigma_prev = jnp.sqrt(1.0 - alpha_bar_prev)
-
-    ratio = c_prev / c
-    A = ratio - 1.0
-    B = ratio * (1.0 - alpha_bar) - sigma_prev * sigma
-    return A, B
-
-
-def get_gauge_loss(cfg: Config, G_net, apply_score, sigmas):
-
-    if cfg.loss.method == 'ddim':
-        loss_fn = get_gauge_ddim_loss(cfg, G_net, apply_score, sigmas)
-
-    if cfg.loss.method == 'dsm':
-        loss_fn = get_gauge_dsm_loss(cfg, G_net, apply_score)
+    if cfg.gauge.ortho_loss == 'cos':
+        loss_fn = multi_cos_loss
 
     return loss_fn
 
 
-def get_gauge_ddim_loss(cfg: Config, apply_G, apply_score, sigmas):
-
-    kinetic_a = cfg.gauge.kinetic_a
-    gauge_a = cfg.gauge.gauge_a
-    alphas_sched, alpha_bar_sched, alpha_bar_prev_sched, _ = noise.get_cofficients(
-        sigmas)
-
-    def loss_fn(params, clean_data, class_l, key):
-
-        # set_up
-        batch_size = clean_data.shape[0]
-        data_shape = clean_data.shape
-        key_sigma, key_noise, div_key = jax.random.split(key, num=3)
-        sigma_vals, t_idx, time = noise.sample_sigmas(
-            key_sigma, sigmas, batch_size)
-
-        alpha_bar_t = alpha_bar_sched[t_idx]      # shape (batch,)
-        alpha_bar_prev_t = alpha_bar_prev_sched[t_idx]  # shape (batch,)
-        alpha_bar = alpha_bar_t[:, None]      # for broadcast
-        alpha_bar_prev = alpha_bar_prev_t[:, None]
-
-        eps = jax.random.normal(
-            key_noise, clean_data.shape, dtype=clean_data.dtype)
-        alpha_bar = noise.sigma_to_alpha_bar(sigma_vals)
-        clean_scale = noise.broadcast_to_match(jnp.sqrt(alpha_bar), clean_data)
-        noise_scale = noise.broadcast_to_match(
-            jnp.sqrt(1.0 - alpha_bar), clean_data)
-        x_t = clean_scale * clean_data + noise_scale * eps
-
-        # get score field
-        eps_field = apply_score(
-            x_t, time, class_l).reshape(batch_size, -1)
-        score_field = - (1/noise_scale.reshape(batch_size, -1))*eps_field
-
-        # get gauge field
-        G_field = apply_G(params, x_t, time,
-                          class_l).reshape(batch_size, -1)
-        x_flat = x_t.reshape(batch_size, -1)
-
-        # assemeble reverse update velocity
-        A, B = compute_A_B(alpha_bar, alpha_bar_prev)
-        A, B = A[:, None], B[:, None]
-        total_field = 0.5*(A*x_flat + B * (score_field+G_field))
-
-        def flat_G(x_flat, sig, cls):
-            x = x_flat.reshape(data_shape)
-            y = apply_G(params, x, sig, cls)
-            return y.reshape(batch_size, -1)
-
-        div_G = hutch_div(flat_G)(x_flat, time, class_l, key=div_key)
-        G_score = vmap(jnp.dot)(G_field, score_field)
-
-        # losses
-        loss_gauge = div_G + G_score
-        loss_gauge = jnp.mean(loss_gauge**2)
-
-        loss_kin = jnp.mean(jnp.sum(total_field**2, axis=-1))
-
-        # combine
-        final_loss = gauge_a*loss_gauge + kinetic_a*loss_kin
-
-        aux = {'gae': loss_gauge, 'kin': loss_kin}
-
-        return final_loss, aux
-
-    return loss_fn
+def multi_cos_loss(v_t_fields, target_corr=0.0):
+    v_t_fields = rearrange(v_t_fields, 'F B D -> B F D')
+    cos_fields = vmap(cosine_spread_avg)(v_t_fields)
+    error = (cos_fields - target_corr)**2
+    return jnp.mean(error)
 
 
-def align_vecs(v1, v2):
-    v_norm = jnp.linalg.norm(v1, axis=-1)
-    d_norm = jnp.linalg.norm(v2, axis=-1)
-    cos = jnp.sum(v1 * v2, axis=-1) / (v_norm * d_norm + 1e-6)
-    loss_cos = jnp.mean((1.0 - cos) ** 2)
-    return loss_cos
+def cosine_spread_avg(x, eps=1e-6):
+    """
+    Average pairwise cosine distance (covers 1 & 3).
 
+    x: array of shape (n, d) (vectors need not be normalized)
 
-def get_gauge_dsm_loss(cfg: Config, apply_G, apply_score):
+    Returns:
+        1 - average cosine similarity over all i < j.
+        Maximizing this spreads vectors out globally.
+    """
+    # Normalize to unit length
+    x = x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + eps)  # (n, d)
 
-    kinetic_a = cfg.gauge.kinetic_a
-    gauge_a = cfg.gauge.gauge_a
-    end_a = cfg.gauge.end_a
+    # Pairwise cosine similarities
+    sim = x @ x.T  # (n, n)
 
-    def loss_fn(params, x0, class_l, key):
+    n = x.shape[0]
+    # Upper triangle without diagonal
+    mask = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
+    sims = jnp.where(mask, sim, 0.0)
 
-        # set_up
-        final_loss = 0.0
-        batch_size = x0.shape[0]
-        x_shape = x0.shape
-        x0 = x0.reshape(batch_size, -1)
-        aux = {}
-
-        key_sigma, key_noise, div_key, ekey = jax.random.split(key, num=4)
-        sigmas, t_vals = noise.sample_vp_sde_sigmas(key_sigma, batch_size)
-        alphas = jnp.sqrt(1.0 - jnp.square(sigmas))
-        beta = noise.vp_t_to_beta(t_vals)
-        eps = jax.random.normal(key_noise, x0.shape)
-        x_t = alphas * x0 + sigmas * eps
-
-        # get score field
-        score_field = apply_score(
-            x_t.reshape(x_shape), t_vals, class_l).reshape(batch_size, -1)
-
-        # get gauge field
-        G_field = apply_G(params, x_t.reshape(x_shape), t_vals,
-                          class_l).reshape(batch_size, -1)
-
-        total_field = -0.5 * beta * (x_t + score_field + G_field)
-
-        # loss gauge
-        if gauge_a != 0:
-            def flat_G(x_flat, sig, cls):
-                x = x_flat.reshape(x_shape)
-                y = apply_G(params, x, sig, cls)
-                return y.reshape(batch_size, -1)
-
-            div_G = hutch_div(flat_G)(x_t, t_vals, class_l, key=div_key)
-            G_score = vmap(jnp.dot)(G_field, score_field)
-
-            loss_gauge = div_G + G_score
-            loss_gauge = jnp.mean(loss_gauge**2)
-            final_loss += gauge_a*loss_gauge
-            aux['gae'] = loss_gauge
-
-        # loss kin
-        if kinetic_a != 0:
-            weights = jnp.squeeze(jnp.square(sigmas))
-            loss_kin = jnp.mean(jnp.sum(total_field**2, axis=-1)*weights)
-            final_loss += kinetic_a*loss_kin
-            aux['kin'] = loss_kin
-
-        # # align to end
-        if end_a != 0:
-            dt = jax.random.uniform(ekey, minval=-0.4, maxval=0.4)
-            t_vals = jnp.clip(t_vals + dt, 1e-3, 1.0)
-            alphas = jnp.sqrt(1.0 - jnp.square(sigmas))
-            x_t = alphas * x0 + sigmas * eps
-
-            score_field = apply_score(
-                x_t.reshape(x_shape), t_vals, class_l).reshape(batch_size, -1)
-            G_field = apply_G(params, x_t.reshape(x_shape), t_vals,
-                              class_l).reshape(batch_size, -1)
-            beta = noise.vp_t_to_beta(t_vals)
-            total_field2 = -0.5 * beta * (x_t + score_field + G_field)
-            loss_end = align_vecs(total_field, total_field2)
-            final_loss += loss_end*end_a
-            aux['end'] = loss_end
-
-        return final_loss, aux
-
-    return loss_fn
+    mean_sim = (2.0 / (n * (n - 1))) * sims.sum()
+    return mean_sim
