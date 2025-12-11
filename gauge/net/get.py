@@ -60,13 +60,21 @@ def get_network(cfg: Config, dataloader, key):
     pshape(x_data, class_l, title='dataloader sample')
 
     out_channels = x_data.shape[-1]
-    out_channels = out_channels*n_fields
 
     time = np.ones((x_data.shape[0], 1))
 
-    net = get_arch(net_cfg, out_channels)
+    multi = True
+    if multi:
+        params_init = []
+        for _ in range(n_fields):
+            key, skey = jax.random.split(key)
+            net = get_arch(net_cfg, out_channels*n_fields)
+            pi = net.init(skey, x_data, time, class_l)
+            params_init.append(pi)
+    else:
+        net = get_arch(net_cfg, out_channels*n_fields)
+        params_init = net.init(key, x_data, time, class_l)
 
-    params_init = net.init(key, x_data, time, class_l)
     param_count = sum(x.size for x in jax.tree_util.tree_leaves(params_init))
     print(f"n_params {param_count:,}")
 

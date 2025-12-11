@@ -1,18 +1,14 @@
 SWEEP = {
     "dataset": "mnist",
-    "optimizer.iters": "20_000, 100_000",
+    "optimizer.iters": "200_000",
     "loss.method": 'dsm',
     "net.arch": "unet",
     "net.size": "m",
     "sample.batch_size": "256",
-    "gauge.run": "True",
-    "gauge.kinetic_a": "0",
-    "gauge.gauge_a": "0",
-    "gauge.compose": "True",
-    "gnet.arch": "skew",
-    "gnet.n_basis": "16,64",
-    "gnet.kernel": "1,3,5",
-    "load_score": "/scratch/jmb1174/sc/gauge/results/mnist/multi/run_g/0"
+    "score.kind": "ve, vp",
+    "gauge.n_fields": "1, 4, 8, 16, 64",
+    "gauge.ortho_a": "1e-3, 1e-2, 1e-1, 1"
+
 }
 
 
@@ -21,7 +17,7 @@ def get_sweep():
 
 
 SLURM_CONFIG_M = {
-    "timeout_min": 60 * 5,
+    "timeout_min": 60 * 4,
     "cpus_per_task": 16,
     "mem_gb": 100,
     "gres": "gpu:h100:1",

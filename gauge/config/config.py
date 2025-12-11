@@ -50,12 +50,9 @@ class Integrate:
 class Score:
     method: str = "dsm"  # "ddpm", "dsm"
 
-    kind: str = "ve"  # vp or ve
+    kind: str = "vp"  # vp or ve
     noise_min: float = -1  # -1 auto pick based on kind
     noise_max: float = -1  # -1 auto pick based on kind
-
-    # Neutral name: used as timesteps (DDPM) or σ-count (DSM)
-    num_levels: int = 1000
 
 
 @dataclass
@@ -65,13 +62,15 @@ class Gauge:
     ortho_loss: str = 'cos'
     ortho_a: float = 1.0
     freeze_0: bool = False
+    rewards: list[str] = field(default_factory=lambda: ['kinetic', 'prev'])
 
 
 @dataclass
 class Test:
     # n_steps: list[int] = field(default_factory=lambda: [
     #                            -1, 2, 5, 10, 25, 50, 100, 250, 500, 1000])
-    n_steps: list[int] = field(default_factory=lambda: [10, 50, 100])
+    n_steps: list[int] = field(default_factory=lambda: [
+                               10, 50, 100, 500, 1000])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16

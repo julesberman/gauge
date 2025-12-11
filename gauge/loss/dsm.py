@@ -13,6 +13,7 @@ def make_dsm_loss(cfg: Config, schedule: NoiseSchedule, apply_fn):
     n_fields = cfg.gauge.n_fields
     ortho_a = cfg.gauge.ortho_a
     ortho_fn = get_ortho_loss(cfg)
+    freeze_0 = cfg.gauge.freeze_0
 
     def loss_fn(params, x0, class_l, key):
         batch_size = x0.shape[0]
@@ -49,10 +50,13 @@ def make_dsm_loss(cfg: Config, schedule: NoiseSchedule, apply_fn):
         final_loss += score_loss
 
         if n_fields > 1:
+            if freeze_0:
+                preds.at[0].set(jax.lax.stop_gradient(preds[0]))
+
             ortho_loss = ortho_fn(preds)
             aux['ort'] = ortho_loss
             final_loss += ortho_loss*ortho_a
 
-        return score_loss, aux
+        return final_loss, aux
 
     return loss_fn

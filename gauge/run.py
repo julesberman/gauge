@@ -65,6 +65,7 @@ def build(cfg: Config):
     net, params_init = get_network(cfg, dataloader, net_key)
 
     noise_schedule = get_noise_schedule(cfg)
+
     score_loss = get_score_loss(cfg, noise_schedule, net)
 
     return key, dataset, data_shape, dataloader, noise_schedule, score_loss,  net, params_init
