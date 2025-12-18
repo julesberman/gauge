@@ -21,7 +21,7 @@ from gauge.train.train import train_model
 @hydra.main(version_base=None, config_name="default")
 def run(cfg: Config) -> None:
 
-    key, dataset, data_shape, dataloader, noise_schedule, score_loss, Score_net, S_params_init = build(
+    key, dataset, data_shape, dataloader, noise_schedule, score_loss, Score_net, S_params_init, apply_fn = build(
         cfg)
 
     key, key_G, key_test, key_opt = jax.random.split(key, num=4)
@@ -42,8 +42,8 @@ def run(cfg: Config) -> None:
 
         for f_n in range(cfg.gauge.n_fields):
             @jit
-            def apply_score(*args, f_n=f_n):
-                return Score_net.apply(score_params, *args)[..., f_n:f_n + 1]
+            def apply_score(x, t, c, f_n=f_n):
+                return apply_fn(score_params, x, t, c)[f_n]
 
             run_test(cfg, apply_score, noise_schedule, dataset, data_shape,
                      key_test, name=f'score_{f_n}')
@@ -59,16 +59,17 @@ def build(cfg: Config):
     key = setup(cfg)
     key, net_key, g_key = jax.random.split(key, num=3)
 
-    dataset, data_shape = get_dataset(cfg)
+    dataset, data_shape, n_classes = get_dataset(cfg)
     dataloader = get_dataloader(cfg, dataset)
 
-    net, params_init = get_network(cfg, dataloader, net_key)
+    net, apply_fn, params_init = get_network(
+        cfg, dataloader, n_classes, net_key)
 
     noise_schedule = get_noise_schedule(cfg)
 
-    score_loss = get_score_loss(cfg, noise_schedule, net)
+    score_loss = get_score_loss(cfg, noise_schedule, apply_fn)
 
-    return key, dataset, data_shape, dataloader, noise_schedule, score_loss,  net, params_init
+    return key, dataset, data_shape, dataloader, noise_schedule, score_loss, net, params_init, apply_fn
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ class Network:
     arch: str = "unet"
     size: str = "m"
     emb_features: list[int] = field(default_factory=lambda: [512, 512])
+    heads: str = "multi"
 
 
 @dataclass
@@ -28,7 +29,7 @@ class Optimizer:
 @dataclass
 class Data:
     normalize: bool = True
-    class_labels: bool = False
+    labels: bool = False
 
 
 @dataclass
@@ -61,8 +62,11 @@ class Gauge:
     n_fields: int = 1
     ortho_loss: str = 'cos'
     ortho_a: float = 1.0
+    ortho_corr: float = 0.0  # target correlation of vector fields
     freeze_0: bool = False
-    rewards: list[str] = field(default_factory=lambda: ['kinetic', 'prev'])
+    div_a: float = 0.0
+    rff_sigma: float = 1.0
+    n_functions: int = 1024
 
 
 @dataclass
@@ -70,7 +74,7 @@ class Test:
     # n_steps: list[int] = field(default_factory=lambda: [
     #                            -1, 2, 5, 10, 25, 50, 100, 250, 500, 1000])
     n_steps: list[int] = field(default_factory=lambda: [
-                               10, 50, 100, 500, 1000])
+                               10, 50, 100, 500])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16
@@ -139,10 +143,11 @@ toy_cfg = Config(
     dataset="toy_swiss",
     data=Data(normalize=False),
     sample=Sample(materialize=True, batch_size=2048),
+    score=Score(noise_min=1e-2, noise_max=1.0),
     net=Network(arch='mlp'),
     gnet=Network(arch='mlp'),
     optimizer=Optimizer(lr=5e-4, iters=20_000),
-    test=Test(n_trajectories=10_000, n_samples=10_000, renormalize=False),
+    test=Test(n_trajectories=2048, n_samples=2048, renormalize=False),
     integrate=Integrate(clip=None)
 )
 cs.store(name="toy", node=toy_cfg)

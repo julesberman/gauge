@@ -3,6 +3,7 @@ import inspect
 import os
 import random
 import string
+from functools import partial
 from time import time
 from typing import Optional, Tuple, Union
 
@@ -386,41 +387,43 @@ def get_available_ram_gb():
 
 #     return div
 
+
 def hutch_div(f, argnum: int = 1, n_samples: int = 1):
     """
-    Hutchinson divergence estimator for both:
+    Hutchinson divergence estimator for:
       - f: R^d -> R^d           (x.shape = (d,))
       - f: R^{b,d} -> R^{b,d}   (x.shape = (b,d))
 
-    Returns div(*args, key) whose output has shape:
-      - ()    for unbatched x
-      - (b,)  for batched x  (per-example divergence)
+    Returns div(*args, key, return_fwd=False) whose output is:
+      - div_est                    if return_fwd=False
+      - (div_est, f_x)             if return_fwd=True
+
+    Shapes:
+      - div_est: () or (b,)
+      - f_x:     (d,) or (b, d)
     """
 
-    @jax.jit
-    def div(*args, key):
+    @partial(jax.jit, static_argnames=("return_fwd",))
+    def div(*args, key, return_fwd: bool = False):
         x = args[argnum]
 
         def g(x_arg):
-            # put x_arg back into argument list
             new_args = list(args)
             new_args[argnum] = x_arg
             return f(*new_args)
 
         keys = jax.random.split(key, n_samples)
 
+        # Compute primal once, and get a cached linear map v ↦ J(x)v
+        f_x, lin = jax.linearize(g, x)
+
         def one(k):
-            # v matches x shape exactly (works for batched and unbatched)
             v = jax.random.rademacher(k, shape=x.shape, dtype=x.dtype)
+            jvp_val = lin(v)  # = J(x) v
+            return jnp.sum(v * jvp_val, axis=-1)  # () or (b,)
 
-            # jvp over entire batch at once if batched
-            _, jvp_val = jax.jvp(g, (x,), (v,))
+        div_est = jax.vmap(one)(keys).mean(axis=0)
 
-            # inner product over the feature dimension
-            # preserves batch dim if present
-            return jnp.sum(v * jvp_val, axis=-1)
-
-        # Average over samples, keeps batch dimension if present
-        return jax.vmap(one)(keys).mean(axis=0)
+        return (div_est, f_x) if return_fwd else div_est
 
     return div

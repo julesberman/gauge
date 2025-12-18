@@ -10,7 +10,8 @@ def get_dataset(config: Config):
 
     if 'toy' in config.dataset:
         ds, shape = get_2d_dataset(config.dataset)
+        n_classes = 1
     else:
-        ds, shape = get_image_dataset(config)
+        ds, shape, n_classes = get_image_dataset(config)
 
-    return ds, shape
+    return ds, shape, n_classes

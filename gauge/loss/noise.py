@@ -85,7 +85,7 @@ class NoiseSchedule:
 
     def sample_time(self, rng, batch_size: int):
         """t ~ Uniform[0,1]."""
-        return random.uniform(rng, (batch_size, 1), minval=0.0, maxval=1.0)
+        return random.uniform(rng, (batch_size, 1), minval=1e-3, maxval=1.0)
 
     def get_xt(self, rng, x0, t):
         """
@@ -109,7 +109,10 @@ class NoiseSchedule:
         while alpha.ndim < x_t.ndim:
             alpha = alpha[..., None]
             sigma = sigma[..., None]
-        return -(x_t - alpha * x0) / jnp.maximum(sigma**2, 1e-12)
+
+        sig = jnp.maximum(sigma**2, 1e-12)
+
+        return -(x_t - alpha * x0) / sig
 
     def dsm_weight(self, t):
         """Simple λ(t) = σ(t)^2 weighting."""

@@ -1,9 +1,8 @@
 import numpy as np
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
-
 from gauge.config.config import Config
 from gauge.utils.tools import get_cpu_count
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 
 class InMemoryDataSource:
@@ -92,10 +91,13 @@ def get_dataloader(
         labels:  np.int32, shape [B], or None if use_labels=False
     """
 
-    use_labels = cfg.data.class_labels
+    use_labels = cfg.data.labels
     batch_size = cfg.sample.batch_size
     normalize = cfg.data.normalize
     shuffle = cfg.sample.shuffle if cfg.sample.shuffle is not None else shuffle
+
+    if 'toy' in cfg.dataset:
+        return SimpleBatcher(dataset, y=None, batch_size=batch_size)
 
     if cfg.sample.materialize:
         images, labels = materialize_data_source(

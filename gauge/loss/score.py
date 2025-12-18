@@ -1,5 +1,16 @@
-"""Compatibility shim for score loss factory."""
 
-from gauge.loss.loss import get_score_loss
+"""Entry points for score-model losses."""
 
-__all__ = ["get_score_loss"]
+
+from gauge.config.config import Config
+from gauge.loss.dsm import make_dsm_loss
+
+
+def get_score_loss(cfg: Config, noise_schedule, apply_fn):
+    """Factory returning the configured score-model loss."""
+    loss_cfg = cfg.score
+    method = loss_cfg.method.lower()
+
+    if method == "dsm":
+        return make_dsm_loss(cfg, noise_schedule, apply_fn)
+    raise ValueError(f"Unsupported loss method '{loss_cfg.method}'.")

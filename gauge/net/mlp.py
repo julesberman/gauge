@@ -12,6 +12,7 @@ class DNN(nn.Module):
     residual: bool = False
     n_classes: int = 10
     use_bias: bool = True
+    heads: int = 1
 
     @nn.compact
     def __call__(self,  x, time, class_l=None):
@@ -66,10 +67,18 @@ class DNN(nn.Module):
                 if x.shape == last_x.shape:
                     x = x + last_x
 
-        x = nn.Dense(
-            self.out_features,
-            use_bias=self.use_bias,
-        )(x)
+        if self.heads == 1:
+            x = nn.Dense(
+                self.out_features,
+                use_bias=self.use_bias,
+            )(x)
+        else:
+            xs = []
+            for _ in range(self.heads):
+                x_c = MLP(self.width, depth=3,
+                          out_features=self.out_features)(x)
+                xs.append(x_c)
+            x = jnp.asarray(xs)
 
         return x
 

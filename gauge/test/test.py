@@ -20,8 +20,14 @@ def run_test(cfg: Config, apply_fn, noise_schedule, dataset, data_shape, key, na
     print("sampling score model...")
     for steps in n_steps:
 
+        if cfg.data.labels:
+            class_l = jax.random.randint(
+                key=key, shape=(cfg.test.n_samples, 1), minval=0, maxval=9)
+        else:
+            class_l = None
+
         samples, trajectories = sample_model(cfg, noise_schedule, apply_fn,
-                                             cfg.test.n_samples, steps, data_shape, key, class_l=None, renormalize=cfg.test.renormalize)
+                                             cfg.test.n_samples, steps, data_shape, key, class_l=class_l, renormalize=cfg.test.renormalize)
 
         trajectories = trajectories[:cfg.test.n_trajectories]
 

@@ -1,14 +1,14 @@
 SWEEP = {
     "dataset": "mnist",
-    "optimizer.iters": "200_000",
-    "loss.method": 'dsm',
+    "optimizer.iters": "250_000",
     "net.arch": "unet",
     "net.size": "m",
     "sample.batch_size": "256",
-    "score.kind": "ve, vp",
-    "gauge.n_fields": "1, 4, 8, 16, 64",
-    "gauge.ortho_a": "1e-3, 1e-2, 1e-1, 1"
-
+    "score.kind": "vp, ve",
+    "gauge.n_fields": "3, 6, 12",
+    "gauge.ortho_a": "1e-1, 1, 10",
+    "net.heads": "multi",
+    # "gauge.ortho_loss": "cos, gauss"
 }
 
 
@@ -17,9 +17,9 @@ def get_sweep():
 
 
 SLURM_CONFIG_M = {
-    "timeout_min": 60 * 4,
+    "timeout_min": 60 * 10,
     "cpus_per_task": 16,
-    "mem_gb": 100,
+    "mem_gb": 250,
     "gres": "gpu:h100:1",
     "account": "extremedata",
 }

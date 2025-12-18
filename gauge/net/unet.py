@@ -300,14 +300,15 @@ class UNet(nn.Module):
     jax.Array
         Output tensor of shape (B, H, W, out_channels).
     """
-    out_channels: int = 1
+    out_channels: int
     emb_features: list = field(default_factory=lambda: [512, 512])
     feature_depths: list = field(default_factory=lambda: [128, 256, 512])
     num_res_blocks: int = 2
     num_middle_res_blocks: int = 1
     activation: Callable = jax.nn.gelu
     norm_groups: int = 8
-    n_classes: int = 10
+    n_classes: int = 3
+    is_trunk: bool = False
 
     def setup(self):
         norm_cls = partial(
@@ -316,7 +317,6 @@ class UNet(nn.Module):
 
     @nn.compact
     def __call__(self, x, time, class_l):
-
         if time is not None:
             time_proj = PeriodicTimestep(
                 self.emb_features[0], flip_sin_to_cos=True, freq_shift=0)
@@ -325,6 +325,8 @@ class UNet(nn.Module):
 
         if class_l is not None:
             class_l = nn.Embed(self.n_classes, self.emb_features[0])(class_l)
+            class_l = jnp.squeeze(class_l)
+            class_l = FeedFoward(features=self.emb_features)(class_l)
 
         temb = None
         if time is not None and class_l is not None:
@@ -388,6 +390,9 @@ class UNet(nn.Module):
                           features=self.feature_depths[0], activation=self.activation, norm_groups=self.norm_groups)(x, temb)
 
         x = self.activation(self.conv_out_norm(x))
+        if self.is_trunk:
+            return x, temb
+
         out = ConvLayer(conv_type, features=self.out_channels,
                         kernel_size=(3, 3))(x)
         return out
