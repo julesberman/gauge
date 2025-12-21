@@ -26,7 +26,7 @@ def _resolve_dataset(name: str) -> Tuple:
     if name in {"cifar10", "cfiar10"}:
         return "cifar10", (32, 32, 3), True, 10
     if name == "flowers":
-        return "tf_flowers", (128, 128, 3), False, 1
+        return "tf_flowers", (64, 64, 3), False, 1
     if name == "celeba":
         return "celeb_a", (64, 64, 3), False, 1
 

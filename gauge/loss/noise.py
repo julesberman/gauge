@@ -83,9 +83,14 @@ class NoiseSchedule:
 
     # ---------- utilities for training ----------
 
-    def sample_time(self, rng, batch_size: int):
+    def sample_time(self, rng, batch_size: int, single=False):
         """t ~ Uniform[0,1]."""
-        return random.uniform(rng, (batch_size, 1), minval=1e-3, maxval=1.0)
+        if single:
+            t = random.uniform(rng, (1, 1), minval=1e-3, maxval=1.0)
+            t = jnp.repeat(t, batch_size, axis=0)
+        else:
+            t = random.uniform(rng, (batch_size, 1), minval=1e-3, maxval=1.0)
+        return t
 
     def get_xt(self, rng, x0, t):
         """

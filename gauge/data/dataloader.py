@@ -1,6 +1,7 @@
 import numpy as np
 from gauge.config.config import Config
 from gauge.utils.tools import get_cpu_count
+from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -32,7 +33,7 @@ def SimpleBatcher(X, y=None, batch_size=32, seed=None):
             yield X[idx], y[idx]
 
 
-def materialize_data_source(ds, use_tqdm=False, normalize_img=True):
+def materialize_data_source(ds, data_shape, use_tqdm=False, normalize_img=True):
     """
     Materialize a tfds-like data_source into RAM as numpy arrays.
     """
@@ -51,10 +52,13 @@ def materialize_data_source(ds, use_tqdm=False, normalize_img=True):
     images = []
     labels = []
     has_label = False
+    target_hw = data_shape[:-1]
+    print(f'resize to {target_hw}')
 
     for i in idx_iter:
         ex = ds[i]
         img = np.asarray(ex["image"])
+        # img = _center_crop_resize(img, target_hw)
         images.append(img)
 
         if "label" in ex:
@@ -73,9 +77,7 @@ def materialize_data_source(ds, use_tqdm=False, normalize_img=True):
 def get_dataloader(
     cfg: Config,
     dataset,
-    batch_size: int = 128,
-    shuffle: bool = True,
-
+    data_shape,
 ):
     """
     Create an *infinite* PyTorch-style batch iterator from a TFDS dataset.
@@ -94,14 +96,13 @@ def get_dataloader(
     use_labels = cfg.data.labels
     batch_size = cfg.sample.batch_size
     normalize = cfg.data.normalize
-    shuffle = cfg.sample.shuffle if cfg.sample.shuffle is not None else shuffle
 
     if 'toy' in cfg.dataset:
         return SimpleBatcher(dataset, y=None, batch_size=batch_size)
 
     if cfg.sample.materialize:
         images, labels = materialize_data_source(
-            dataset, use_tqdm=True, normalize_img=normalize)
+            dataset, data_shape, use_tqdm=True, normalize_img=normalize)
         if not use_labels:
             labels = None
         return SimpleBatcher(images, y=labels, batch_size=batch_size)
@@ -142,3 +143,24 @@ def get_dataloader(
                     yield images, None
 
     return infinite()
+
+
+def _center_crop_resize(img: np.ndarray, out_hw):
+    out_h, out_w = out_hw
+    pil = Image.fromarray(img)
+
+    # If target looks RGB but image isn't, make it RGB (keeps things consistent)
+    if pil.mode not in ("RGB", "L"):
+        pil = pil.convert("RGB")
+
+    w, h = pil.size
+    scale = max(out_w / w, out_h / h)
+    new_w, new_h = int(round(w * scale)), int(round(h * scale))
+
+    pil = pil.resize((new_w, new_h), resample=Image.Resampling.BILINEAR)
+
+    left = (new_w - out_w) // 2
+    top = (new_h - out_h) // 2
+    pil = pil.crop((left, top, left + out_w, top + out_h))
+
+    return np.asarray(pil)

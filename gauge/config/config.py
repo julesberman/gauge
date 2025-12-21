@@ -50,23 +50,24 @@ class Integrate:
 @dataclass
 class Score:
     method: str = "dsm"  # "ddpm", "dsm"
-
     kind: str = "vp"  # vp or ve
     noise_min: float = -1  # -1 auto pick based on kind
     noise_max: float = -1  # -1 auto pick based on kind
+    fixed_t: bool = True
 
 
 @dataclass
 class Gauge:
     run: bool = True
     n_fields: int = 1
-    ortho_loss: str = 'cos'
-    ortho_a: float = 1.0
-    ortho_corr: float = 0.0  # target correlation of vector fields
+    var_features: str = 'weak'
+    var_loss: str = 'cos'
+    var_a: float = 1.0
+    reg_a: float = 0.0
     freeze_0: bool = False
-    div_a: float = 0.0
     rff_sigma: float = 1.0
     n_functions: int = 1024
+    u_stat: bool = True
 
 
 @dataclass
@@ -89,8 +90,6 @@ class Config:
     dataset: str = 'mnist'
 
     net: Network = field(default_factory=Network)
-    gnet: Network = field(default_factory=lambda: Network(
-        size="s", emb_features=[256, 256]))
 
     optimizer: Optimizer = field(default_factory=Optimizer)
     data: Data = field(default_factory=Data)
@@ -145,12 +144,20 @@ toy_cfg = Config(
     sample=Sample(materialize=True, batch_size=2048),
     score=Score(noise_min=1e-2, noise_max=1.0),
     net=Network(arch='mlp'),
-    gnet=Network(arch='mlp'),
     optimizer=Optimizer(lr=5e-4, iters=20_000),
     test=Test(n_trajectories=2048, n_samples=2048, renormalize=False),
     integrate=Integrate(clip=None)
 )
 cs.store(name="toy", node=toy_cfg)
+
+
+toy_cfg = Config(
+    dataset="flowers",
+    sample=Sample(materialize=True, batch_size=64),
+    score=Score(noise_min=-1, noise_max=-1),
+    integrate=Integrate(clip=None)
+)
+cs.store(name="flowers", node=toy_cfg)
 
 
 def get_outpath() -> Path:

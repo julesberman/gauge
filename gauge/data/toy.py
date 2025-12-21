@@ -6,14 +6,6 @@ import numpy as np
 from gauge.utils.tools import normalize
 
 
-def _normalize_to_unit_square(x: np.ndarray) -> np.ndarray:
-    # Affine map each dim to [-1, 1]
-    x_min = x.min(axis=0, keepdims=True)
-    x_max = x.max(axis=0, keepdims=True)
-    x = 2.0 * (x - x_min) / (x_max - x_min + 1e-8) - 1.0
-    return x.astype("float32")
-
-
 def _sample_swiss_roll(n, rng):
     t = rng.uniform(1.5 * math.pi, 4.5 * math.pi, size=n)
     x = t * np.cos(t)
@@ -22,15 +14,18 @@ def _sample_swiss_roll(n, rng):
     return data
 
 
-def _sample_checkerboard(n, rng):
-    x1 = rng.uniform(-2, 2, size=n)
-    x2 = rng.uniform(-2, 2, size=n)
-    x2 += (np.floor(x1) % 2)  # offset every other column
-    data = np.stack([x1, x2], axis=1)
-    return data
+def _sample_checkerboard(n, rng=None):
+    rng = np.random.default_rng(rng)
+    i = rng.integers(0, 4, size=n)
+    j = rng.integers(0, 4, size=n)
+    i = np.where(((i + j) & 1) == 0, i, (i + 1) & 3)  # keep every other cell
+    u = rng.random((n, 2))
+    x = -1.0 + (i + u[:, 0]) * 0.5
+    y = -1.0 + (j + u[:, 1]) * 0.5
+    return np.stack([x, y], axis=1)
 
 
-def _sample_multimodal_gaussian(n, rng, num_modes=8, radius=2.0, sigma=0.1):
+def _sample_multimodal_gaussian(n, rng, num_modes=6, radius=2.0, sigma=0.5):
     # 8 Gaussians on a circle
     angles = np.linspace(0, 2 * math.pi, num_modes, endpoint=False)
     means = np.stack(

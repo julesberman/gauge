@@ -1,11 +1,12 @@
 import random
 import secrets
 
-import gauge.io.result as R
 import jax
+from omegaconf import OmegaConf
+
+import gauge.io.result as R
 from gauge.config.config import Config
 from gauge.io.result import init_result
-from omegaconf import OmegaConf
 
 
 def setup(config: Config):

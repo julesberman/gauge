@@ -72,6 +72,7 @@ class DNN(nn.Module):
                 self.out_features,
                 use_bias=self.use_bias,
             )(x)
+            x = x[None]
         else:
             xs = []
             for _ in range(self.heads):

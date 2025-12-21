@@ -284,8 +284,6 @@ def jacrand(rng_key, fun, argnums=0):
         # Get (primal_out, jvp_out)
         y, jvp = jax.jvp(partial_fun, primals, tangent_subset)
 
-        jvp = jnp.linalg.norm(jvp.reshape(-1))
-
         return jvp
 
     return wrapper

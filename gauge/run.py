@@ -60,7 +60,7 @@ def build(cfg: Config):
     key, net_key, g_key = jax.random.split(key, num=3)
 
     dataset, data_shape, n_classes = get_dataset(cfg)
-    dataloader = get_dataloader(cfg, dataset)
+    dataloader = get_dataloader(cfg, dataset, data_shape)
 
     net, apply_fn, params_init = get_network(
         cfg, dataloader, n_classes, net_key)
