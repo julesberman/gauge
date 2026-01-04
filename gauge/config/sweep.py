@@ -1,33 +1,19 @@
 SWEEP = {
     "dataset": "mnist",
     "net.size": "m",
-    "optimizer.iters": "250_000",
+    "optimizer.iters": "100_000",
     "score.kind": "vp",
+    "score.target": "noise",
     "gauge.n_fields": "3",
-    "gauge.var_a": "1",
+    "gauge.var_a": "0, 1",
     "net.heads": "multi",
     "gauge.var_features": "v_err",
     "gauge.var_loss": "cos",
-    "score.fixed_t": "True",
-    "gauge.u_stat": "True",
-    "gauge.n_functions": "64, 512, 1024, 2048, 5000, 10_000",
+    "gauge.resample": "fixed, step",
+    "gauge.n_functions": "0, 1, 2, 4, 8, 16, 32, 64, 5000",
+    "gauge.omegas": "one",
+    "gauge.weighted": "one",
 }
-
-
-# SWEEP = {
-#     "dataset": "toy_swiss, toy_checker",
-#     "net.size": "m",
-#     "optimizer.iters": "250_000",
-#     "score.kind": "vp",
-#     "gauge.n_fields": "3, 8",
-#     "gauge.var_a": "1",
-#     "net.heads": "multi",
-#     "gauge.var_features": "v_err, proj_err",
-#     "gauge.var_loss": "cos",
-#     "score.fixed_t": "True, False",
-#     "gauge.u_stat": "True, False"
-
-# }
 
 
 def get_sweep():
@@ -35,9 +21,9 @@ def get_sweep():
 
 
 SLURM_CONFIG_M = {
-    "timeout_min": 60 * 16,
+    "timeout_min": 60 * 5,
     "cpus_per_task": 16,
-    "mem_gb": 100,
+    "mem_gb": 300,
     "gres": "gpu:h100:1",
     "account": "extremedata",
 }

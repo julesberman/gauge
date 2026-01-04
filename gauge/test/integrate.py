@@ -116,14 +116,9 @@ def _sample_dsm(
     #     labels = jnp.full((batch_size, 1), labels)
 
     def ode_fn(t, y, args):
-        if clip_range is not None:
-            lo, hi = clip_range
-            y = jnp.clip(y, lo, hi)
-
-        # Shape time like in training: (B, 1)
-
         t_vec = jnp.full((batch_size, 1), t)
-        score_pred = apply_fn(y, t_vec, labels)
+        t_snr = schedule.get_logsnr_time(t_vec)
+        score_pred = apply_fn(y, t_snr, labels)
         drift = schedule.pf_ode_vt(y, t, score_pred)
         return drift
     # -------------------------------------------------------------------------

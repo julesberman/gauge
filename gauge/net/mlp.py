@@ -18,6 +18,7 @@ class DNN(nn.Module):
     def __call__(self,  x, time, class_l=None):
         A = nn.gelu
         if time is not None:
+
             time = nn.Dense(
                 self.width,
                 use_bias=self.use_bias,
@@ -72,7 +73,6 @@ class DNN(nn.Module):
                 self.out_features,
                 use_bias=self.use_bias,
             )(x)
-            x = x[None]
         else:
             xs = []
             for _ in range(self.heads):

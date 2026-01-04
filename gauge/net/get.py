@@ -1,7 +1,6 @@
 from functools import partial
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 from einops import rearrange
 
@@ -80,16 +79,6 @@ def get_network(cfg: Config, dataloader, n_classes, key):
             y = net.apply(*args)
             return rearrange(y, 'B ... (C F) -> F B ... C', F=n_fields)
 
-    if heads == 'class':
-        class_l = jnp.ones_like(time, dtype=jnp.int32)
-        net = get_arch(cfg.net, out_channels, n_classes=n_fields)
-        params_init = net.init(key, x_data, time, class_l)
-
-        def apply_fn(params, x, time, idx):
-            class_l = jnp.ones_like(time) * idx
-            class_l = jnp.asarray(class_l, dtype=jnp.int32)
-            return net.apply(params, x, time, class_l)
-
     if heads == 'multi':
         n_heads = n_fields
         net = get_arch(cfg.net, out_channels,
@@ -97,7 +86,10 @@ def get_network(cfg: Config, dataloader, n_classes, key):
         params_init = net.init(key, x_data, time, class_l)
 
         def apply_fn(params, x, time, class_l):
-            return net.apply(params, x, time, class_l)
+            y = net.apply(params, x, time, class_l)
+            if n_heads == 1:
+                y = y[None]
+            return y
 
     param_count = sum(x.size for x in jax.tree_util.tree_leaves(params_init))
     print(f"n_params {param_count:,}")

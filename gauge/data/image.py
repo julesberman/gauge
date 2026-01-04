@@ -13,10 +13,11 @@ def get_image_dataset(config: Config):
     data_dir = '/scratch/jmb1174/tensorflow_datasets/'
     builder = tfds.builder(tfds_name, data_dir=data_dir)
     builder.download_and_prepare(file_format="array_record")
-    sources = tfds.data_source(tfds_name, data_dir=data_dir)
-    train_ds = sources["train"]
+    sources = tfds.data_source(tfds_name, data_dir=data_dir, split=["all"])
+    print(sources[0])
+    dataset = sources[0]
 
-    return train_ds, image_shape, n_classes
+    return dataset, image_shape, n_classes
 
 
 def _resolve_dataset(name: str) -> Tuple:
@@ -26,7 +27,7 @@ def _resolve_dataset(name: str) -> Tuple:
     if name in {"cifar10", "cfiar10"}:
         return "cifar10", (32, 32, 3), True, 10
     if name == "flowers":
-        return "tf_flowers", (64, 64, 3), False, 1
+        return "oxford_flowers102", (64, 64, 3), False, 1
     if name == "celeba":
         return "celeb_a", (64, 64, 3), False, 1
 

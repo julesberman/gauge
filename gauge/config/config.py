@@ -24,6 +24,8 @@ class Optimizer:
     scheduler: str = 'cos'
     warm_up: bool = False
     optimizer: str = "adamw"
+    ema_decay: float | None = 0.9999
+    grad_clip: float | None = 1.0
 
 
 @dataclass
@@ -38,6 +40,7 @@ class Sample:
     shuffle: bool = True
     shuffle_buffer_size: Optional[int] = None
     materialize: bool = True
+    resize: bool = False
 
 
 @dataclass
@@ -51,31 +54,33 @@ class Integrate:
 class Score:
     method: str = "dsm"  # "ddpm", "dsm"
     kind: str = "vp"  # vp or ve
+    target: str = 'noise'
     noise_min: float = -1  # -1 auto pick based on kind
     noise_max: float = -1  # -1 auto pick based on kind
     fixed_t: bool = True
+    log_t: bool = False
 
 
 @dataclass
 class Gauge:
     run: bool = True
     n_fields: int = 1
-    var_features: str = 'weak'
+    var_features: str = 'v_err'
     var_loss: str = 'cos'
     var_a: float = 1.0
     reg_a: float = 0.0
-    freeze_0: bool = False
-    rff_sigma: float = 1.0
+    reg_fn: str = 'kin'
     n_functions: int = 1024
-    u_stat: bool = True
+    weighted: str = 'one'
+    omegas: str = 'one'
+    resample: str = 'step'
 
 
 @dataclass
 class Test:
     # n_steps: list[int] = field(default_factory=lambda: [
     #                            -1, 2, 5, 10, 25, 50, 100, 250, 500, 1000])
-    n_steps: list[int] = field(default_factory=lambda: [
-                               10, 50, 100, 500])
+    n_steps: list[int] = field(default_factory=lambda: [250])
     n_samples: int = 256
     save_samples: bool = False
     n_trajectories: int = 16
@@ -151,13 +156,39 @@ toy_cfg = Config(
 cs.store(name="toy", node=toy_cfg)
 
 
-toy_cfg = Config(
+flowers_cfg = Config(
     dataset="flowers",
-    sample=Sample(materialize=True, batch_size=64),
+    sample=Sample(materialize=True, batch_size=86, resize=True),
     score=Score(noise_min=-1, noise_max=-1),
     integrate=Integrate(clip=None)
 )
-cs.store(name="flowers", node=toy_cfg)
+cs.store(name="flowers", node=flowers_cfg)
+
+
+flowers_cfg = Config(
+    dataset="celeba",
+    sample=Sample(materialize=True, batch_size=86, resize=True),
+    score=Score(noise_min=-1, noise_max=-1),
+    integrate=Integrate(clip=None)
+)
+cs.store(name="celeba", node=flowers_cfg)
+
+
+flowers_cfg = Config(
+    dataset="cifar10",
+    sample=Sample(materialize=True, batch_size=128, resize=True),
+    score=Score(noise_min=-1, noise_max=-1),
+    integrate=Integrate(clip=None)
+)
+cs.store(name="cifar10", node=flowers_cfg)
+
+mnist_cfg = Config(
+    dataset="mnist",
+    sample=Sample(materialize=True, batch_size=512, resize=False),
+    score=Score(noise_min=-1, noise_max=-1),
+    integrate=Integrate(clip=None)
+)
+cs.store(name="mnist", node=mnist_cfg)
 
 
 def get_outpath() -> Path:

@@ -20,18 +20,6 @@ def get_var_loss(cfg: Config):
             f"Unsupported diversity loss '{cfg.gauge.ortho_loss}'.")
 
 
-def loss_weak_cos(v_t, target, x_t_flat, n_functions, sigma, weights, key):
-    err = v_t - target[None]
-    test_residual, moments, omega = test_in_rff(
-        err, x_t_flat, n_functions, key, sigma=sigma, weights=weights, divfree=True)
-
-    loss = jnp.mean(pairwise_cosine_sim(moments)**2)
-    # loss = dpp_logdet_loss(moments)
-    # loss = orthonormal_loss(moments)
-
-    return loss
-
-
 def loss_cos(features):
     cos_fields = pairwise_cosine_sim(features)
     error = (cos_fields)**2
@@ -88,65 +76,6 @@ def loss_gauss(features):
     return jnp.mean(kernels)
 
 
-# def test_in_rff(values, x_f, n_functions, key, sigma=1.0, weights=None, divfree=False):
-#     F, B, D = values.shape
-#     B, one = sigma.shape
-
-#     k_w, k_b, k_A = jax.random.split(key, num=3)
-
-#     scale = 1  # jnp.sqrt(2.0 / n_functions)
-
-#     # We generate a base omega: (M, D), expand it to (B, M, D) to scale by sigma per-batch-item
-#     base_omega = jax.random.normal(k_w, (n_functions, D))  # (M, D)
-#     omega = (1/sigma[:, None, :]) * base_omega[None, :, :]
-
-#     b = jax.random.uniform(k_b, (n_functions,),
-#                            minval=0.0, maxval=2.0 * jnp.pi)
-#     b = jnp.broadcast_to(b, (B, n_functions))
-#     dot_wx = jnp.einsum("bmd,bd->bm", omega, x_f)
-#     z = dot_wx + b  # (B, M)
-#     sin_z = jnp.sin(z)   # (B,M)
-#     cos_z = jnp.cos(z)   # (B,M)
-
-#     if divfree:
-#         # === Divergence-free plane wave: g(x,t)=cos(z)*p with p ⟂ omega ===
-#         # (M, D) global
-#         a = jax.random.normal(k_A, (n_functions, D))
-#         a = jnp.broadcast_to(a[None, :, :], omega.shape)  # (B,M,D)
-
-#         omega_norm2 = jnp.sum(omega * omega, axis=-1, keepdims=True) + 1e-8
-#         proj = jnp.sum(omega * a, axis=-1, keepdims=True) / omega_norm2
-#         p = a - omega * proj
-#         p = p / (jnp.linalg.norm(p, axis=-1, keepdims=True) + 1e-8)
-
-#         g_cos = scale * cos_z[..., None] * p              # (B,M,D)
-#         g_sin = scale * sin_z[..., None] * p              # (B,M,D)
-
-#         omega_v_cos = jnp.einsum("fbd,bmd->fbm", values, g_cos)  # (F,B,M)
-#         omega_v_sin = jnp.einsum("fbd,bmd->fbm", values, g_sin)  # (F,B,M)
-
-#         omega_v = jnp.concatenate(
-#             [omega_v_cos, omega_v_sin], axis=-1)  # (F,B,2M)
-
-#     else:
-#         # === NOT divergence-free (gradient test): g = -sin(z) * omega ===
-#         dot = jnp.einsum("fbd,bmd->fbm", values, omega)  # (F,B,M)
-#         omega_v_cos = -scale * sin_z[None, :, :] * dot   # moments for ∇cos
-#         omega_v_sin = scale * cos_z[None, :, :] * dot   # moments for ∇sin
-#         omega_v = jnp.concatenate(
-#             [omega_v_cos, omega_v_sin], axis=-1)  # (F,B,2M)
-
-#     if weights is not None:
-#         omega_v = omega_v * weights[None, :, None]
-
-#     # Feature per field per test: average over samples b
-#     moments = jnp.mean(omega_v, axis=1)
-
-#     test_residual = jnp.mean(moments ** 2, axis=1)  # (F,)
-
-#     return test_residual, moments, omega
-
-
 def pairwise_sq_distances(X: jnp.ndarray) -> jnp.ndarray:
     """
     X: (n, d)
@@ -174,47 +103,60 @@ def pairwise_cosine_sim(X):
     return G[i, j]
 
 
-def test_in_rff(values, x_t, n_functions, key, sigma=1.0, weights=None, u_stat=False):
+def sample_omega_unitdir(key, M, d, sigma_t, ell_min=0.25,
+                         kappa_min=0.5, kappa_max=2.0):
+    """
+    Samples omega_m(t) = u_m / ell_m(t), with u_m uniform on unit sphere.
+    ell_m(t) = ell_min + kappa_m * sigma_t
+    where kappa_m is either fixed (multiscale=False) or log-uniform (multiscale=True).
+    """
+    key_u, key_k, key_b = jax.random.split(key, 3)
+
+    # random unit directions u in R^d
+    u = jax.random.normal(key_u, (M, d))
+    u = u / (jnp.linalg.norm(u, axis=-1, keepdims=True) + 1e-12)
+
+    kappa = jnp.ones((M,)) * ((kappa_min + kappa_max) * 0.5)
+
+    ell = ell_min + kappa * sigma_t  # shape [M]
+    omega = u / ell[:, None]         # shape [M, d]
+
+    b = jax.random.uniform(key_b, (M,), minval=0.0, maxval=2.0 * jnp.pi)
+    return omega, b, ell
+
+
+def test_in_rff(values, x_t, n_functions, key, sigma=1.0):
     # values are the residuals (v_t(x) - score(x,t))
     # x_t is the noisey data time t
     # weights are B dim array of sigma(t)**2
     F, B, D = values.shape
-    B, one = sigma.shape
 
-    k_w, k_b, k_A = jax.random.split(key, num=3)
+    k_w, k_b, k_s = jax.random.split(key, num=3)
 
-    # We generate a base omega: (M, D), expand it to (B, M, D) to scale by sigma per-batch-item
-    # In general these sigmas should all be the same if we draw each batch at a fixed time
+    # sigma is a scalar
     base_omega = jax.random.normal(k_w, (n_functions, D))  # (M, D)
-    omega = (1/sigma[:, None, :]) * base_omega[None, :, :]  # (B, M, D)
+    omega = base_omega / sigma
+    # x_t = x_t / sigma
 
     b = jax.random.uniform(k_b, (n_functions,),
                            minval=0.0, maxval=2.0 * jnp.pi)
     b = jnp.broadcast_to(b, (B, n_functions))
-    dot_wx = jnp.einsum("bmd,bd->bm", omega, x_t)
+    dot_wx = jnp.einsum("md,bd->bm", omega, x_t)
     z = dot_wx + b  # (B, M)
     sin_z = jnp.sin(z)   # (B,M)
     cos_z = jnp.cos(z)   # (B,M)
 
-    omega_dot = jnp.einsum("fbd,bmd->fbm", values, omega)  # (F,B,M)
+    omega_dot = jnp.einsum("fbd,md->fbm", values, omega)  # (F,B,M)
     omega_v_cos = -sin_z[None, :, :] * omega_dot   # moments for ∇cos
     omega_v_sin = cos_z[None, :, :] * omega_dot   # moments for ∇sin
     omega_v = jnp.concatenate(
         [omega_v_cos, omega_v_sin], axis=-1)  # (F,B,2M)
 
-    if weights is not None:
-        omega_v = omega_v * weights[None, :, None]
+    # omega_v = omega_v * jnp.sqrt(2) / jnp.sqrt(D)
+    # if weights is not None:
+    #     omega_v = omega_v * weights
 
-    # Feature per field per test: average over samples b
-    if u_stat:
-        sum_z = jnp.sum(omega_v, axis=1)           # (F, 2M)
-        sum_z2 = jnp.sum(omega_v * omega_v, axis=1)  # (F, 2M)
-        denom = B * (B - 1)
-        mu2_unbiased = (sum_z * sum_z - sum_z2) / denom  # (F, 2M)
-        test_residual = jnp.mean(mu2_unbiased, axis=1)  # (F,)
-    else:
-        moments = jnp.mean(omega_v, axis=1)
-
+    moments = jnp.mean(omega_v, axis=1)
     test_residual = jnp.mean(moments ** 2, axis=1)  # (F,)
 
     return test_residual, moments, sin_z, cos_z, omega
@@ -225,9 +167,8 @@ def projected_rho_div(
     n_functions,    # M
     sin_z,          # (B,M)
     cos_z,          # (B,M)
-    omega,          # (B,M,D)
+    omega,          # (M,D)
     key,
-    weights=None,
     ridge=1e-4,
     eps=1e-8,
 ):
@@ -241,15 +182,14 @@ def projected_rho_div(
     F, B, D = residuals.shape
     M = n_functions
 
+    omega = jnp.repeat(omega[None], B, axis=0)
+
     # ----- Gradient test vectors: g_cos = ∇cos(z) = -sin(z)*omega, g_sin = ∇sin(z) = cos(z)*omega
     g_cos = -sin_z[..., None] * omega     # (B,M,D)
     g_sin = cos_z[..., None] * omega     # (B,M,D)
 
     # ----- b_i = E[ G^T r_i ] using omega_dot = r·omega
     omega_dot = jnp.einsum("fbd,bmd->fbm", residuals, omega)         # (F,B,M)
-
-    if weights is not None:
-        omega_dot = omega_dot * weights[None, :, None]
 
     b_cos = jnp.mean((-sin_z[None, :, :] * omega_dot), axis=1)       # (F,M)
     b_sin = jnp.mean((cos_z[None, :, :] * omega_dot), axis=1)       # (F,M)

@@ -21,19 +21,29 @@ str_to_opt = {
 
 
 def train_model(cfg: Config, dataloader, loss, params_init, key_opt, has_aux=False, name=''):
-
     opt_cfg = cfg.optimizer
-
-    opt_params, loss_history = run_train(params_init, dataloader, loss, opt_cfg.iters, optimizer=opt_cfg.optimizer,
-                                         learning_rate=opt_cfg.lr, scheduler=opt_cfg.scheduler, rng=key_opt, has_aux=has_aux)
+    opt_params, ema_params, loss_history = run_train(
+        params_init,
+        dataloader,
+        loss,
+        opt_cfg.iters,
+        optimizer=opt_cfg.optimizer,
+        learning_rate=opt_cfg.lr,
+        scheduler=opt_cfg.scheduler,
+        rng=key_opt,
+        has_aux=has_aux,
+        ema_decay=opt_cfg.ema_decay or None,
+        grad_clip_norm=opt_cfg.grad_clip or None
+    )
 
     R.RESULT[f"{name}_opt_params"] = opt_params
+    R.RESULT[f"{name}_ema_params"] = ema_params
     R.RESULT[f"{name}_loss_history"] = loss_history
-
     if len(loss_history) > 0:
         R.RESULT[f"{name}_final_loss"] = loss_history[-1]
 
-    return opt_params
+    # best practice: return EMA for sampling/eval (falls back to opt_params if EMA disabled)
+    return ema_params
 
 
 # ---------- multi-device helpers ----------
@@ -46,48 +56,19 @@ def run_train(
     dataloader,
     fwd_fn,
     iters,
-    optimizer: str = 'adamw',   # Default to adamw
+    optimizer: str = 'adamw',
     learning_rate: float = 1e-3,
     scheduler: str = 'cos',
-    N: int = 2048,               # Record the training loss 1000 times by default
-    rng=None,                    # Accept a JAX key instead of an int seed
-    has_aux=False
+    N: int = 2048,
+    rng=None,
+    has_aux=False,
+    ema_decay: float | None = None,
+    grad_clip_norm: float | None = None,
 ):
-    """
-    Train a Flax module with dropout using Optax optimizers.
-
-    Args:
-        net: A Flax module with an .apply() method. Typically called as
-             net.apply(params, x, l, rngs={'dropout': dropout_rng}, train=True).
-        params_init: The initial parameters of the network.
-        dataloader: An iterator returning (x, y, l) batches.
-        fwd_fn: A function taking (**) -> scalar loss.
-        iters: Number of training iterations (gradient steps).
-        optimizer: Which optimizer to use (str). E.g., 'adam', 'adamw' (default).
-        learning_rate: Base learning rate (float).
-        scheduler: If True, use a piecewise schedule (warm-up + constant).
-        N: Number of times to record the training loss over the course of training.
-        rng: A JAX PRNGKey for dropout and random operations.
-        val_fn: (Optional) A callable that takes (params) -> scalar validation metric.
-        val_steps: Evaluate `val_fn` every `val_steps` iterations, but only if
-                   `val_fn` is not None and `val_steps >= iters`.
-
-    Returns:
-        opt_params: The trained parameters after `iters` iterations (final).
-        val_params:
-            - If validation is performed (val_fn not None and val_steps >= iters),
-              this will be the parameters that achieved the *lowest* validation scalar.
-            - Otherwise, just the same as opt_params.
-        loss_history: A numpy array of recorded loss values (length ~ N).
-    """
-    # ---------------------
-    # Setup default RNG key
-    # ---------------------
     if rng is None:
         rng = jax.random.PRNGKey(1)
 
     if scheduler is not None:
-        # Otherwise, just use standard cosine decay
         if scheduler == 'cos':
             learning_rate = optax.cosine_decay_schedule(
                 init_value=learning_rate, decay_steps=iters, alpha=1e-3
@@ -96,81 +77,85 @@ def run_train(
             learning_rate = optax.constant_schedule(value=learning_rate)
         elif scheduler == 'linear':
             learning_rate = optax.linear_schedule(
-                init_value=learning_rate, end_value=learning_rate*1e-3, transition_steps=iters)
+                init_value=learning_rate,
+                end_value=learning_rate * 1e-3,
+                transition_steps=iters
+            )
         elif scheduler == 'warmup':
             learning_rate = optax.warmup_constant_schedule(
-                init_value=1e-6, peak_value=learning_rate, warmup_steps=10_000)
-        else:
-            learning_rate = learning_rate
+                init_value=1e-6, peak_value=learning_rate, warmup_steps=10_000
+            )
 
     opti_f = str_to_opt[optimizer]
-    tx = opti_f(learning_rate=learning_rate)
 
-    # -------------------------
-    # 3. Initialize the OptState
-    # -------------------------
+    # NEW: optionally clip gradients before the optimizer transform
+    base_tx = opti_f(learning_rate=learning_rate)
+    if grad_clip_norm is not None:
+        tx = optax.chain(
+            optax.clip_by_global_norm(float(grad_clip_norm)),
+            base_tx,
+        )
+    else:
+        tx = base_tx
+
     opt_state = tx.init(params_init)
 
-    # --------------------
-    # 4. Define train_step
-    # --------------------
+    use_ema = ema_decay is not None
+    ema_step_size = 0.0 if not use_ema else (1.0 - float(ema_decay))
 
     @jax.jit
-    def train_step(params, rng, opt_state, x, cls):
-        """
-        Single step of forward, loss computation, backward, and optimizer update.
-        """
-
+    def train_step(params, ema_params, rng, opt_state, x, cls):
         def _loss_fn(p):
             return fwd_fn(p, x, cls, rng)
 
-        # Compute gradients
-        loss_out, grads = jax.value_and_grad(
-            _loss_fn, has_aux=has_aux)(params)
+        loss_out, grads = jax.value_and_grad(_loss_fn, has_aux=has_aux)(params)
+
         updates, new_opt_state = tx.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
 
-        return new_params, new_opt_state, loss_out, rng
+        if use_ema:
+            new_ema_params = optax.incremental_update(
+                new_params, ema_params, step_size=ema_step_size)
+        else:
+            new_ema_params = new_params
+
+        return new_params, new_ema_params, new_opt_state, loss_out, rng
 
     loss_history = []
     interval = max(1, iters // N)
 
     opt_params = params_init
+    ema_params = params_init  # if EMA disabled, we’ll just keep ema_params == opt_params
+
     pbar = tqdm(range(iters), colour='blue')
-
     dl_iter = iter(dataloader)
-    vkey, key = jax.random.split(rng)
 
-    def jax_put(x, replicated=False, float_16=False):
+    if _MULTI_DEVICE:
+        mesh = jax.make_mesh((_N_DEVICES,), ('batch',))
+        SHARD_BATCH = NamedSharding(mesh, P('batch'))
+        SHARD_REPL = NamedSharding(mesh, P())
+    else:
+        mesh = SHARD_BATCH = SHARD_REPL = None
 
+    def jax_put(x, sharding=None, float_16=False):
         if float_16:
-            x = x.astype(jnp.float16)
-        if _MULTI_DEVICE:
-            mesh = jax.make_mesh((_N_DEVICES,), ('batch',))
-            if replicated:
-                sharding = NamedSharding(mesh, P())
-            else:
-                sharding = NamedSharding(mesh, P('batch'))
-            x = jax.device_put(x, sharding)
-        else:
-            x = jax.device_put(x)
-        return x
+            x = x.astype(jnp.bfloat16)
+        return jax.device_put(x, sharding) if sharding is not None else jax.device_put(x)
 
-    opt_params = jax_put(opt_params, replicated=True)
-    opt_state = jax_put(opt_state, replicated=True)
+    opt_params = jax_put(opt_params, SHARD_REPL)
+    ema_params = jax_put(ema_params, SHARD_REPL)
+    opt_state = jax_put(opt_state,  SHARD_REPL)
 
     for step in pbar:
-        x, cls = next(dl_iter)  # get batch
+        x, cls = next(dl_iter)
 
-        if cls is None:
-            x = jax_put(x, float_16=False)
-        else:
-            x, cls = [jax_put(bb, float_16=False) for bb in (x, cls)]
+        x = jax_put(x, SHARD_BATCH)
+        cls = jax_put(cls, SHARD_BATCH) if cls is not None else None
 
         rng, skey = jax.random.split(rng)
-        # Take a single training step
-        opt_params, opt_state, loss_out, rng = train_step(
-            opt_params, skey, opt_state, x, cls
+
+        opt_params, ema_params, opt_state, loss_out, rng = train_step(
+            opt_params, ema_params, skey, opt_state, x, cls
         )
 
         if has_aux:
@@ -179,17 +164,13 @@ def run_train(
             segments = [f"loss: {loss_value:10.4f}".ljust(FIELD_WIDTH)]
             for k, v in aux.items():
                 segments.append(f"{k}: {v:10.4f}".ljust(FIELD_WIDTH))
-            des = " | ".join(segments)
-
-            pbar.set_description(des)
+            pbar.set_description(" | ".join(segments), refresh=False)
         else:
             loss_value = loss_out
-            pbar.set_description(f"loss: {loss_value:.6f}")
+            pbar.set_description(f"loss: {loss_value:.6f}", refresh=False)
 
-        # Record the loss every `interval` steps
         if (step % interval) == 0:
             loss_history.append(loss_value)
 
     loss_history = np.array(loss_history, dtype=np.float32)
-
-    return opt_params, loss_history
+    return opt_params, ema_params, loss_history

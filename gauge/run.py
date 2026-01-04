@@ -61,11 +61,10 @@ def build(cfg: Config):
 
     dataset, data_shape, n_classes = get_dataset(cfg)
     dataloader = get_dataloader(cfg, dataset, data_shape)
+    noise_schedule = get_noise_schedule(cfg)
 
     net, apply_fn, params_init = get_network(
         cfg, dataloader, n_classes, net_key)
-
-    noise_schedule = get_noise_schedule(cfg)
 
     score_loss = get_score_loss(cfg, noise_schedule, apply_fn)
 

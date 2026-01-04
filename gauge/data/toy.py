@@ -6,12 +6,13 @@ import numpy as np
 from gauge.utils.tools import normalize
 
 
-def _sample_swiss_roll(n, rng):
+def _sample_swiss_roll(n, rng=None):
+    rng = np.random.default_rng(rng)
     t = rng.uniform(1.5 * math.pi, 4.5 * math.pi, size=n)
     x = t * np.cos(t)
     y = t * np.sin(t)
     data = np.stack([x, y], axis=1)
-    return data
+    return data * 0.1
 
 
 def _sample_checkerboard(n, rng=None):
@@ -55,7 +56,3 @@ def get_2d_dataset(name: str, n_samples: int = 50_000, seed: int | None = None):
     data = jnp.asarray(data)
 
     return data, (2,)
-
-# Example:
-# ds = make_2d_dataset("swissroll", n_samples=5000, seed=0)
-# dl = torch.utils.data.DataLoader(ds, batch_size=256, shuffle=True)

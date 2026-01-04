@@ -1,9 +1,10 @@
 import numpy as np
-from gauge.config.config import Config
-from gauge.utils.tools import get_cpu_count
 from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
+from gauge.config.config import Config
+from gauge.utils.tools import get_cpu_count, print_stats
 
 
 class InMemoryDataSource:
@@ -33,7 +34,7 @@ def SimpleBatcher(X, y=None, batch_size=32, seed=None):
             yield X[idx], y[idx]
 
 
-def materialize_data_source(ds, data_shape, use_tqdm=False, normalize_img=True):
+def materialize_data_source(ds, data_shape, use_tqdm=False, normalize_img=True, resize=False):
     """
     Materialize a tfds-like data_source into RAM as numpy arrays.
     """
@@ -58,7 +59,8 @@ def materialize_data_source(ds, data_shape, use_tqdm=False, normalize_img=True):
     for i in idx_iter:
         ex = ds[i]
         img = np.asarray(ex["image"])
-        # img = _center_crop_resize(img, target_hw)
+        if resize:
+            img = _center_crop_resize(img, target_hw)
         images.append(img)
 
         if "label" in ex:
@@ -95,6 +97,7 @@ def get_dataloader(
 
     use_labels = cfg.data.labels
     batch_size = cfg.sample.batch_size
+    resize = cfg.sample.resize
     normalize = cfg.data.normalize
 
     if 'toy' in cfg.dataset:
@@ -102,9 +105,14 @@ def get_dataloader(
 
     if cfg.sample.materialize:
         images, labels = materialize_data_source(
-            dataset, data_shape, use_tqdm=True, normalize_img=normalize)
+            dataset, data_shape, use_tqdm=True, normalize_img=normalize, resize=resize)
         if not use_labels:
             labels = None
+
+        aa = tuple(range(images.ndim - 1))
+        mean, std = np.mean(images, axis=aa), np.std(images, axis=aa)
+        print(f'data mean: {mean} data std: {std} ')
+        print_stats(images)
         return SimpleBatcher(images, y=labels, batch_size=batch_size)
 
     n_cpus = get_cpu_count()

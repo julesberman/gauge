@@ -21,7 +21,7 @@ plots*
 paper
 videos
 envgauge/
-
+.ipynb
 *.ipynb
 ###################
 # PYTHON DEFAULTS #

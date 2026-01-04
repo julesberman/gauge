@@ -295,9 +295,7 @@ def scatter_movie(
         sample_idx = np.random.choice(
             pts.shape[-1] - 1, size=n_samples, replace=False)
         sample_idx = np.asarray(sample_idx, dtype=np.int32)
-        print(sample_idx, pts.shape)
         pts = pts[:, :, sample_idx]
-        print(pts.shape)
         if type(c) == list:
             c = c[sample_idx]
     fig, ax = plt.subplots()
